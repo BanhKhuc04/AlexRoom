@@ -105,6 +105,8 @@ class AppSafetyBoundaryTests(unittest.TestCase):
             devices = alex_app.v1_devices()
             legacy = alex_app.get_esp01()
 
+        # v1/devices now returns a single canonical record — no duplicate.
+        self.assertEqual(len(devices["items"]), 1, "v1/devices must expose exactly one ESP01 record")
         for node in (status["node"], capabilities["nodes"]["esp01"], devices["items"][0], legacy):
             self.assertEqual(node["verification_status"], "software_verified")
             self.assertFalse(node["hardware_verified"])
@@ -127,6 +129,116 @@ class AppSafetyBoundaryTests(unittest.TestCase):
         self.assertNotIn('"hardware_verified": False', app_source)
         self.assertNotIn('"hardware_verified": False', hardware_source)
         self.assertNotIn('"basic_physical_validation": True', hardware_source)
+
+
+class HealthConsistencyTests(unittest.TestCase):
+    """Regression tests for the broker-restart health/device truth-consistency bug.
+
+    Root cause: /health previously read device_state["availability"] (legacy MQTT
+    availability topic), while /api/v1/devices read command_service.device()["connection"]
+    (V1 heartbeat).  After a broker restart the V1 heartbeat resumes before the legacy
+    availability topic is re-published, so the two sources disagreed.  Both endpoints
+    now derive connectivity truth exclusively from command_service.device().
+    """
+
+    def setUp(self) -> None:
+        # Reset the command_service V1 device to a known state before each test
+        # so tests don't bleed state into each other through the module singleton.
+        # Also mock store.put_device so tests don't require a migrated SQLite DB
+        # (the test module is imported before store.migrate() runs in production).
+        import unittest.mock as mock
+        self._store_patcher = mock.patch.object(alex_app.command_service.store, "put_device")
+        self._store_patcher.start()
+        with alex_app.command_service._lock:
+            alex_app.command_service._device = alex_app.command_service._default_device()
+        # Also reset the legacy device_state to a neutral value.
+        with alex_app.state_lock:
+            alex_app.device_state["availability"] = "unknown"
+
+    def tearDown(self) -> None:
+        self._store_patcher.stop()
+
+    def _make_heartbeat(self, online: bool = True) -> dict:
+        return {
+            "protocolVersion": 1,
+            "nodeId": "esp01",
+            "firmware": "0.4.0",
+            "ip": "192.168.0.42",
+            "rssi": -38,
+            "online": online,
+        }
+
+    def test_v1_heartbeat_sets_esp01_online(self) -> None:
+        """handle_heartbeat(online=True) must set connection='online' in the V1 device."""
+        alex_app.command_service.handle_heartbeat(self._make_heartbeat(online=True), "mqtt")
+        device = alex_app.command_service.device()
+        self.assertEqual(device["connection"], "online")
+
+    def test_health_reports_online_after_v1_heartbeat(self) -> None:
+        """/health must report device='online' after a V1 heartbeat arrives."""
+        alex_app.command_service.handle_heartbeat(self._make_heartbeat(online=True), "mqtt")
+        result = alex_app.health()
+        self.assertEqual(result["device"], "online")
+
+    def test_stale_legacy_availability_cannot_force_health_offline(self) -> None:
+        """Even if legacy device_state['availability'] is 'offline', /health must reflect
+        the authoritative V1 heartbeat connection state, not the legacy value."""
+        alex_app.command_service.handle_heartbeat(self._make_heartbeat(online=True), "mqtt")
+        # Deliberately corrupt the legacy state to simulate the stale scenario.
+        with alex_app.state_lock:
+            alex_app.device_state["availability"] = "offline"
+        result = alex_app.health()
+        self.assertEqual(
+            result["device"], "online",
+            "/health must not be dragged offline by stale legacy availability state",
+        )
+
+    def test_v1_devices_exposes_exactly_one_esp01_record(self) -> None:
+        """/api/v1/devices must return exactly one ESP01 record after the fix.
+        Two conflicting records with different connection values are not acceptable.
+        """
+        devices = alex_app.v1_devices()
+        self.assertEqual(
+            len(devices["items"]), 1,
+            f"Expected 1 canonical ESP01 record, got {len(devices['items'])}",
+        )
+
+    def test_broker_reconnect_and_resumed_heartbeat_restores_online(self) -> None:
+        """Simulate broker restart: mark offline via LWT, then receive a fresh heartbeat.
+        After the heartbeat, both /health and /api/v1/devices must show 'online'.
+        """
+        # 1. LWT fires — device goes offline.
+        alex_app.command_service.mark_offline("mqtt")
+        self.assertEqual(alex_app.command_service.device()["connection"], "offline")
+
+        # 2. ESP01 resumes heartbeat after broker restart.
+        alex_app.command_service.handle_heartbeat(self._make_heartbeat(online=True), "mqtt")
+
+        # 3. /health must now be online.
+        self.assertEqual(alex_app.health()["device"], "online")
+
+        # 4. /api/v1/devices must show online for the single canonical record.
+        devices = alex_app.v1_devices()
+        self.assertEqual(devices["items"][0]["connection"], "online")
+
+    def test_verification_truth_unchanged_after_heartbeat(self) -> None:
+        """Online connectivity from V1 heartbeat must NOT affect verification truth.
+        esp01.hardware_verified must remain False; relay_1..4 must stay restricted.
+        """
+        alex_app.command_service.handle_heartbeat(self._make_heartbeat(online=True), "mqtt")
+        devices = alex_app.v1_devices()
+        node = devices["items"][0]
+        # Connection is online but verification is independent.
+        self.assertEqual(node["connection"], "online")
+        self.assertFalse(node["hardware_verified"],
+                         "ONLINE must not imply hardware_verified")
+        self.assertEqual(node["verification_status"], "basic_physical_validated")
+        caps = node["capabilities"]
+        for relay in ("relay_1", "relay_2", "relay_3", "relay_4"):
+            self.assertEqual(caps[relay]["verification_status"], "restricted",
+                             f"{relay} must remain restricted after heartbeat")
+            self.assertFalse(caps[relay]["command_allowed"],
+                             f"{relay} command_allowed must remain False after heartbeat")
 
 
 if __name__ == "__main__":

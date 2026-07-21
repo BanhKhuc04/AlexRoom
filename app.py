@@ -465,15 +465,17 @@ def info() -> dict[str, str]:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    with state_lock:
-        availability = device_state["availability"]
-        last_seen = device_state["last_seen"]
-
+    # Connectivity truth comes from the V1 CommandService heartbeat, not from
+    # the legacy device_state which is only updated by the old MQTT availability
+    # topic.  After a broker restart the V1 heartbeat resumes first; the legacy
+    # topic may remain stale, which would cause /health to disagree with the V1
+    # device record.  Using command_service.device() keeps both in sync.
+    v1 = command_service.device()
     return {
         "api": "online",
         "mqtt": "connected" if mqtt_connected.is_set() else "disconnected",
-        "device": availability,
-        "last_seen": last_seen,
+        "device": v1["connection"],
+        "last_seen": v1["last_seen_at"],
     }
 
 
@@ -711,19 +713,19 @@ def v1_devices() -> dict[str, Any]:
     node_truth = capability_registry.get_node_status(DEVICE_ID)
     if node_truth is None:
         raise HTTPException(status_code=503, detail="ESP01 chưa có trong capability registry")
+    # Build a single canonical ESP01 record from the authoritative V1 source
+    # (CommandService heartbeat) merged with registry verification truth.
+    # Relay reported state from the legacy MQTT path is folded in here rather
+    # than exposed as a second conflicting device entry; two ESP01 records with
+    # different connection values would present contradictory truth to consumers.
     v1_device = {**command_service.device(), **node_truth}
     with state_lock:
-        esp = {
-            "id": DEVICE_ID,
-            "name": "ESP01",
-            "connection": device_state["availability"],
-            "reported_state": {"relays": dict(device_state["relays"])},
-            "desired_state": None,
-            "last_seen_at": device_state["last_seen"],
-            "source": "mqtt_reported_state",
-            **node_truth,
-        }
-    return {"items": [v1_device, esp], "simulator": ALEX_SIMULATOR}
+        relay_state = dict(device_state["relays"])
+    # Merge relay state into the V1 reported_state without overwriting test_led.
+    existing_reported = dict(v1_device.get("reported_state") or {})
+    existing_reported["relays"] = relay_state
+    v1_device["reported_state"] = existing_reported
+    return {"items": [v1_device], "simulator": ALEX_SIMULATOR}
 
 
 @app.post("/api/v1/commands")
