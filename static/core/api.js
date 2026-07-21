@@ -43,8 +43,8 @@ export class AlexApi {
       if (!response.ok) {
         let message = `HTTP ${response.status}`;
         try {
-          const payload = /** @type {{detail?: string}} */ (await response.json());
-          message = payload.detail ?? message;
+          const payload = /** @type {{detail?: string | {reason?: string}}} */ (await response.json());
+          message = typeof payload.detail === "string" ? payload.detail : payload.detail?.reason ?? message;
         } catch {
           // The status code remains the safest available error message.
         }
@@ -92,11 +92,6 @@ export class AlexApi {
     };
   }
 
-  /** @param {number} relayId @param {"ON" | "OFF"} action */
-  async controlRelay(relayId, action) {
-    return await this.request(`/api/devices/esp01/relays/${relayId}/${action.toLowerCase()}`, { method: "POST" });
-  }
-
   /** @param {import("./domain").RoomMode} mode */
   async setRoomMode(mode) {
     return await this.request("/api/modes", {
@@ -106,13 +101,22 @@ export class AlexApi {
     });
   }
 
-  /** @param {boolean} value */
-  async setTestLed(value) {
+  /**
+   * @param {string} target
+   * @param {string} action
+   * @param {Record<string, unknown>} payload
+   */
+  async requestDeviceCommand(target, action, payload) {
     return /** @type {Promise<import("./domain").V1Command>} */ (this.request("/api/v1/commands", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ node_id: "esp01", target: "test_led", action: "set", payload: { value }, risk_level: "safe", origin: "user" }),
+      body: JSON.stringify({ node_id: "esp01", target, action, payload, origin: "user" }),
     }));
+  }
+
+  /** @param {boolean} value */
+  async setTestLed(value) {
+    return await this.requestDeviceCommand("test_led", "set", { value });
   }
 
   /** @param {string} commandId */

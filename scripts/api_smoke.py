@@ -24,7 +24,10 @@ def request(path: str, method: str = "GET", body: dict | None = None) -> tuple[i
         return error.code, json.loads(error.read())
 
 
-for route in ("/health", "/api/info", "/api/devices/esp01", "/api/v1/status", "/api/v1/devices"):
+for route in (
+    "/health", "/api/info", "/api/devices/esp01", "/api/v1/status",
+    "/api/v1/devices", "/api/v1/safety/capabilities",
+):
     status, _ = request(route)
     assert status == 200, (route, status)
 
@@ -49,9 +52,10 @@ restricted_status, _ = request("/api/v1/commands", "POST", {
 })
 assert restricted_status == 423
 
-unsupported_status, _ = request("/api/v1/commands", "POST", {
-    "target": "relay_1", "action": "set", "payload": {"value": True}, "risk_level": "safe",
+relay_status, relay_denied = request("/api/v1/commands", "POST", {
+    "target": "relay_1", "action": "on", "payload": {"value": True}, "risk_level": "safe",
 })
-assert unsupported_status == 400
+assert relay_status == 423
+assert relay_denied["detail"]["risk_level"] == "restricted"
 
-print(f"API smoke PASS: {created['command_id']} -> confirmed; restricted=423; unsupported=400")
+print(f"API smoke PASS: {created['command_id']} -> confirmed; restricted=423; relay-safe-claim=423")

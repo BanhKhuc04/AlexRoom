@@ -25,12 +25,13 @@ from pydantic import BaseModel, Field
 
 from alex_store import AlexStore, utc_now
 from alex_hardware import (
-    ACK_TOPIC, HEARTBEAT_TOPIC, REPORTED_TOPIC, STATUS_TOPIC, TELEMETRY_TOPIC,
+    ACK_TOPIC, COMMAND_TOPIC, HEARTBEAT_TOPIC, REPORTED_TOPIC, STATUS_TOPIC, TELEMETRY_TOPIC,
     CommandService, RealtimeHub,
 )
 from alex_simulator import Esp01Simulator
 from alex_orchestration import AutomationExecutor, AutomationScheduler, MissionExecutor
 from alex_brain import BrainService
+from alex_safety import CapabilityRegistry, CommandGateway, GatewayResult, SafetyPolicy
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -124,6 +125,7 @@ class V1CommandRequest(BaseModel):
     target: str = Field(min_length=1, max_length=80)
     action: str = Field(min_length=1, max_length=80)
     payload: dict[str, Any] = Field(default_factory=dict)
+    # Retained only for wire compatibility. SafetyPolicy never consumes this value.
     risk_level: str = "safe"
     origin: str = "user"
 
@@ -202,18 +204,22 @@ def require_mutation_budget(_: None = Depends(require_api_key)) -> None:
         mutation_times.append(now)
 
 
-def publish_relay(relay_id: int, action: str) -> None:
-    topic = f"{TOPIC_PREFIX}/switch/relay_{relay_id}/command"
-    result = mqtt_client.publish(topic, action, qos=0, retain=False)
+def _gateway_response_or_denied(result: GatewayResult) -> dict[str, Any]:
+    if result.decision.allowed:
+        return result.as_dict()
+    decision = result.decision.as_dict()
+    add_event(
+        "safety",
+        f"Đã chặn {decision['node_id']}/{decision['capability_id']}/{decision['action']}: {decision['reason']}",
+        "warning",
+    )
+    raise HTTPException(status_code=423, detail=decision)
 
-    if result.rc != mqtt.MQTT_ERR_SUCCESS:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Không gửi được MQTT, mã lỗi: {result.rc}",
-        )
 
-
-def publish_v1(topic: str, payload: str, qos: int, retain: bool) -> bool:
+def _publish_v1_command(topic: str, payload: str, qos: int, retain: bool) -> bool:
+    if topic != COMMAND_TOPIC:
+        add_event("safety", f"Transport từ chối topic ngoài command V1: {topic}", "warning")
+        return False
     if simulator is not None:
         return simulator.publish(topic, payload, qos, retain)
     if not mqtt_connected.is_set():
@@ -222,9 +228,12 @@ def publish_v1(topic: str, payload: str, qos: int, retain: bool) -> bool:
     return result.rc == mqtt.MQTT_ERR_SUCCESS
 
 
-command_service = CommandService(store, publish_v1, realtime_hub)
-mission_executor = MissionExecutor(store, command_service)
-automation_executor = AutomationExecutor(store, mission_executor, command_service)
+capability_registry = CapabilityRegistry()
+safety_policy = SafetyPolicy(capability_registry, simulator_mode=ALEX_SIMULATOR)
+command_service = CommandService(store, _publish_v1_command, realtime_hub, simulator_mode=ALEX_SIMULATOR)
+command_gateway = CommandGateway(safety_policy, command_service)
+mission_executor = MissionExecutor(store, command_gateway)
+automation_executor = AutomationExecutor(store, mission_executor, command_gateway)
 automation_scheduler = AutomationScheduler(store, automation_executor, realtime_hub)
 brain_service = BrainService(store, realtime_hub, BRAIN_MAC, BRAIN_HOST, BRAIN_PORT)
 
@@ -282,6 +291,9 @@ def on_message(
             add_event("mqtt_protocol", f"Bỏ qua JSON không hợp lệ trên {topic}", "warning")
             return
         message_source = "simulated" if document.get("source") == "simulated" else "mqtt"
+        if message_source == "simulated" and not ALEX_SIMULATOR:
+            add_event("safety", f"Bỏ qua simulated message trong hardware mode: {topic}", "warning")
+            return
         if topic == ACK_TOPIC:
             command_service.handle_ack(document, message_source)
         elif topic == REPORTED_TOPIC:
@@ -557,26 +569,14 @@ def control_relay(
             detail="action chỉ được là ON hoặc OFF",
         )
 
-    if not mqtt_connected.is_set():
-        raise HTTPException(
-            status_code=503,
-            detail="Alex Core chưa kết nối MQTT",
-        )
-
-    publish_relay(relay_id, action)
-    relay_name = load_config()["relay_names"][str(relay_id)]
-    add_event(
-        "relay",
-        f"{relay_name}: gửi lệnh {action}",
-        "success" if action == "ON" else "info",
+    result = command_gateway.request(
+        node_id=DEVICE_ID,
+        capability_id=f"relay_{relay_id}",
+        action=action,
+        payload={},
+        origin="legacy_api",
     )
-
-    return {
-        "accepted": True,
-        "device_id": DEVICE_ID,
-        "relay": relay_id,
-        "action": action,
-    }
+    return _gateway_response_or_denied(result)
 
 
 @app.post("/api/devices/esp01/relays-all/{action}")
@@ -592,27 +592,20 @@ def control_all_relays(
             detail="action chỉ được là ON hoặc OFF",
         )
 
-    if not mqtt_connected.is_set():
-        raise HTTPException(
-            status_code=503,
-            detail="Alex Core chưa kết nối MQTT",
-        )
-
-    for relay_id in range(1, 5):
-        publish_relay(relay_id, action)
-
-    add_event(
-        "relay",
-        f"Toàn bộ relay: gửi lệnh {action}",
-        "warning" if action == "OFF" else "success",
+    decisions = command_gateway.authorize_batch(
+        (DEVICE_ID, f"relay_{relay_id}", action) for relay_id in range(1, 5)
     )
-
-    return {
-        "accepted": True,
-        "device_id": DEVICE_ID,
-        "relays": [1, 2, 3, 4],
-        "action": action,
-    }
+    if not all(decision.allowed for decision in decisions):
+        add_event("safety", f"Đã chặn relays-all {action}: relay chưa được xác minh", "warning")
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "allowed": False,
+                "reason": "batch_contains_denied_capability",
+                "decisions": [decision.as_dict() for decision in decisions],
+            },
+        )
+    raise HTTPException(status_code=501, detail="Không có relay transport nào được phép")
 
 
 @app.post("/api/modes")
@@ -626,16 +619,17 @@ def set_mode(
     if mode not in allowed:
         raise HTTPException(status_code=400, detail="Chế độ không hợp lệ")
 
-    # An toàn mặc định: Away và Sleep luôn tắt toàn bộ relay.
-    if mode in {"away", "sleep"}:
-        for relay_id in range(1, 5):
-            publish_relay(relay_id, "OFF")
-
     with state_lock:
         device_state["mode"] = mode
 
-    add_event("mode", f"Chuyển sang chế độ {mode}", "success")
-    return {"accepted": True, "mode": mode}
+    add_event("mode", f"Đã cập nhật room mode logic: {mode}; không gửi relay", "success")
+    return {
+        "accepted": True,
+        "mode": mode,
+        "logical_mode_updated": True,
+        "physical_actions": [],
+        "physical_result": "not_requested_restricted_capabilities",
+    }
 
 
 @app.get("/api/v1/status")
@@ -647,6 +641,16 @@ def v1_status() -> dict[str, Any]:
         "database": store.health(),
         "mqtt": "connected" if mqtt_connected.is_set() else "disconnected",
         "hardware_verified": False,
+        "safety_policy": "central_gateway",
+    }
+
+
+@app.get("/api/v1/safety/capabilities")
+def v1_safety_capabilities() -> dict[str, Any]:
+    return {
+        "source": "server_authoritative",
+        "execution_mode": safety_policy.execution_mode,
+        "nodes": capability_registry.public_snapshot(),
     }
 
 
@@ -661,7 +665,7 @@ def v1_devices() -> dict[str, Any]:
             "reported_state": {"relays": dict(device_state["relays"])},
             "desired_state": None,
             "capabilities": ["relay:1", "relay:2", "relay:3", "relay:4"],
-            "risk_level": "controlled",
+            "risk_level": "restricted",
             "last_seen_at": device_state["last_seen"],
             "source": "mqtt_reported_state",
             "hardware_verified": False,
@@ -674,25 +678,28 @@ def v1_command(
     payload: V1CommandRequest,
     _: None = Depends(require_mutation_budget),
 ) -> dict[str, Any]:
-    if payload.risk_level not in {"safe", "controlled", "restricted"}:
-        raise HTTPException(status_code=400, detail="risk_level không hợp lệ")
-    if payload.risk_level == "restricted":
-        add_event("safety", f"Đã chặn restricted action: {payload.target}/{payload.action}", "warning")
-        raise HTTPException(status_code=423, detail="Restricted action cần interlock, xác nhận và sensor prerequisite")
-    if payload.node_id != "esp01" or payload.target != "test_led" or payload.action != "set":
-        raise HTTPException(status_code=400, detail="Vertical slice hiện chỉ cho phép esp01/test_led/set")
-    value = payload.payload.get("value")
-    if not isinstance(value, bool):
-        raise HTTPException(status_code=422, detail="payload.value phải là boolean")
     try:
-        command = command_service.create_test_led_command(
-            value, payload.origin, "simulated" if ALEX_SIMULATOR else "local_software",
+        result = command_gateway.request(
+            node_id=payload.node_id,
+            capability_id=payload.target,
+            action=payload.action,
+            payload=payload.payload,
+            origin=payload.origin,
         )
     except RuntimeError as error:
         if str(error) == "esp01_offline":
             raise HTTPException(status_code=409, detail="ESP01 chưa ONLINE; command không được gửi") from error
         raise
-    return {**command, "simulated": ALEX_SIMULATOR, "hardware_verified": False}
+    response = _gateway_response_or_denied(result)
+    command = response.get("command")
+    if command is None:
+        raise HTTPException(status_code=500, detail="Gateway không tạo command")
+    return {
+        **command,
+        "safety_decision": response["decision"],
+        "simulated": ALEX_SIMULATOR,
+        "hardware_verified": False,
+    }
 
 
 @app.get("/api/v1/commands")
@@ -796,12 +803,6 @@ def v1_put_domain(
         raise HTTPException(status_code=404, detail="Domain không tồn tại")
     if not record_id or len(record_id) > 80:
         raise HTTPException(status_code=400, detail="record_id không hợp lệ")
-    actions = payload.body.get("actions", [])
-    if isinstance(actions, list) and any(
-        isinstance(action, dict) and action.get("risk_level") == "restricted"
-        for action in actions
-    ):
-        raise HTTPException(status_code=423, detail="Restricted action không được lưu khi chưa có safety interlock")
     store.put_record(domain, record_id, payload.body)
     store.add_audit(domain, f"Updated {record_id}", "success")
     return {"saved": True, "domain": domain, "id": record_id, "source": "local_software"}

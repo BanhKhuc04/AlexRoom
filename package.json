@@ -10,7 +10,7 @@
     "test": "node --test tests/*.test.mjs",
     "test:backend": "python -m unittest discover -s tests -p \"test_*.py\" -v",
     "check": "npm run typecheck && npm run lint && npm test && npm run build",
-    "check:all": "npm run check && npm run test:backend && python -m py_compile app.py alex_store.py alex_hardware.py alex_simulator.py alex_orchestration.py alex_brain.py",
+    "check:all": "npm run check && npm run test:backend && python -m py_compile app.py alex_store.py alex_safety.py alex_hardware.py alex_simulator.py alex_orchestration.py alex_brain.py",
     "preview:windows": "powershell -ExecutionPolicy Bypass -File scripts/preview.ps1"
   },
   "devDependencies": {

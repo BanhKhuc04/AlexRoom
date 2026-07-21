@@ -236,6 +236,17 @@ function renderCommandTrace(command) {
   elements.assistantEvidence.textContent = `EVIDENCE / ${command.acknowledgmentSource?.toUpperCase() ?? "PENDING"}`;
 }
 
+/** @param {RoomMode} mode @param {"UPDATED" | "FAILED"} status @param {string} message */
+function renderLogicalModeTrace(mode, status, message) {
+  activeCommand = null;
+  const values = elements.commandTrace.querySelectorAll("b");
+  if (values[0]) values[0].textContent = `alex-core/room-mode / ${mode.toUpperCase()}`;
+  if (values[1]) values[1].textContent = status;
+  if (values[2]) values[2].textContent = "NOT APPLICABLE";
+  elements.assistantMessage.textContent = message;
+  elements.assistantEvidence.textContent = "EVIDENCE / API LOGICAL STATE";
+}
+
 /** @param {DeviceCommand} command */
 function commandMessage(command) {
   const messages = {
@@ -334,22 +345,6 @@ function delay(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
-/** @param {number} relayId @param {"ON" | "OFF"} action */
-async function waitForRelayAck(relayId, action) {
-  const deadline = Date.now() + 7000;
-  while (Date.now() < deadline) {
-    await delay(500);
-    try {
-      snapshot = await api.getSnapshot();
-      renderSnapshot();
-      if ((snapshot.device.relays[String(relayId)] ?? "UNKNOWN").toUpperCase() === action) return true;
-    } catch {
-      // Keep waiting inside the bounded window; timeout remains honest.
-    }
-  }
-  return false;
-}
-
 function prepareCommandVisualState() {
   if (!beginThinking()) return false;
   return setAlexState("acting");
@@ -381,26 +376,17 @@ async function executeRelayCommand(relayId, action) {
   renderCommandTrace(command);
 
   try {
-    await api.controlRelay(relayId, action);
-    command = transitionCommand(command, "waiting_ack");
-    renderCommandTrace(command);
-    const acknowledged = await waitForRelayAck(relayId, action);
-    if (acknowledged) {
-      command = transitionCommand(command, "confirmed", { acknowledgmentSource: "mqtt_reported_state" });
-      renderCommandTrace(command);
-      setAlexState("success");
-      showToast(`Relay ${relayId} đã được ESP01 xác nhận ${action}.`, "success");
-    } else {
-      command = transitionCommand(command, "timed_out", { failureReason: "ESP01 không báo trạng thái khớp trong 7 giây." });
-      renderCommandTrace(command);
-      setAlexState("warning");
-      showToast("Không thể xác nhận trạng thái thiết bị.", "error");
-    }
+    await api.requestDeviceCommand(`relay_${relayId}`, action.toLowerCase(), {});
+    throw new Error("SafetyPolicy không trả về kết quả từ chối như dự kiến.");
   } catch (error) {
-    const reason = error instanceof Error ? error.message : "Lỗi không xác định";
+    const detail = error instanceof Error ? error.message : "restricted_capability";
+    const reason = detail === "restricted_capability"
+      ? `Relay ${relayId} bị khóa: RESTRICTED / NOT HARDWARE VERIFIED.`
+      : detail;
     command = transitionCommand(command, "failed", { failureReason: reason });
     renderCommandTrace(command);
     setAlexState("warning");
+    presenceView.showMicroResponse(reason);
     showToast(reason, "error");
   }
   renderActiveWorkspace();
@@ -454,30 +440,23 @@ async function executeModeCommand(mode) {
   }
   if (!prepareCommandVisualState()) return;
 
-  let command = createDeviceCommand({ deviceId: "alex-core/room-mode", action: mode.toUpperCase(), payload: { mode } });
-  renderCommandTrace(command);
-  command = transitionCommand(command, "sending");
-  renderCommandTrace(command);
   try {
-    await api.setRoomMode(mode);
-    command = transitionCommand(command, "waiting_ack");
-    renderCommandTrace(command);
+    const response = /** @type {{logical_mode_updated?: boolean, physical_actions?: unknown[]}} */ (await api.setRoomMode(mode));
     snapshot = await api.getSnapshot();
     renderSnapshot();
-    if (snapshot.device.mode === mode) {
-      command = transitionCommand(command, "confirmed", { acknowledgmentSource: "api_reported_state" });
-      renderCommandTrace(command);
+    if (snapshot.device.mode === mode && response.logical_mode_updated === true && response.physical_actions?.length === 0) {
+      const message = `Room mode logic ${mode.toUpperCase()} đã cập nhật; không gửi lệnh relay.`;
+      renderLogicalModeTrace(mode, "UPDATED", message);
       setAlexState("success");
-      showToast(`Room mode đã xác nhận: ${mode.toUpperCase()}.`, "success");
+      presenceView.showMicroResponse(message);
+      showToast(`Room mode logic đã cập nhật: ${mode.toUpperCase()} · không gửi relay.`, "success");
     } else {
-      command = transitionCommand(command, "timed_out", { failureReason: "Room mode báo về không khớp yêu cầu." });
-      renderCommandTrace(command);
+      renderLogicalModeTrace(mode, "FAILED", "Room mode logic báo về không khớp yêu cầu.");
       setAlexState("warning");
     }
   } catch (error) {
     const reason = error instanceof Error ? error.message : "Không thể đổi room mode";
-    command = transitionCommand(command, "failed", { failureReason: reason });
-    renderCommandTrace(command);
+    renderLogicalModeTrace(mode, "FAILED", reason);
     setAlexState("warning");
     showToast(reason, "error");
   }

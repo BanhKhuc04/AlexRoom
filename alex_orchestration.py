@@ -6,16 +6,17 @@ import uuid
 from copy import deepcopy
 from typing import Any
 
-from alex_hardware import CommandService, TERMINAL_PHASES
+from alex_hardware import TERMINAL_PHASES
+from alex_safety import CommandGateway
 from alex_store import AlexStore, utc_now
 
 
 class MissionExecutor:
     """Sequential, auditable safe-action mission executor."""
 
-    def __init__(self, store: AlexStore, commands: CommandService, timeout: float = 12.0) -> None:
+    def __init__(self, store: AlexStore, gateway: CommandGateway, timeout: float = 12.0) -> None:
         self.store = store
-        self.commands = commands
+        self.gateway = gateway
         self.timeout = timeout
 
     def run(self, definition: dict[str, Any], origin: str = "system") -> dict[str, Any]:
@@ -35,25 +36,40 @@ class MissionExecutor:
             step = {
                 "index": index, "target": spec.get("target"), "action": spec.get("action"),
                 "status": "running", "command_id": None, "failure_reason": None,
+                "safety_decision": None,
                 "started_at": utc_now(), "completed_at": None,
             }
             mission["steps"].append(step)
             self.store.put_record("mission_runs", mission["mission_id"], mission)
-            if spec.get("risk_level") == "restricted" or spec.get("target") != "test_led" or spec.get("action") != "set":
-                step.update(status="failed", failure_reason="unsupported_or_restricted_action", completed_at=utc_now())
-                failed += 1
-                continue
             try:
-                command = self.commands.create_test_led_command(bool(spec.get("value")), origin, mission["source"])
+                payload = spec.get("payload") if isinstance(spec.get("payload"), dict) else {"value": spec.get("value")}
+                gateway_result = self.gateway.request(
+                    node_id=str(spec.get("node_id", "esp01")),
+                    capability_id=str(spec.get("target", "")),
+                    action=str(spec.get("action", "")),
+                    payload=payload,
+                    origin=origin,
+                )
+                step["safety_decision"] = gateway_result.decision.as_dict()
+                if not gateway_result.decision.allowed or gateway_result.command is None:
+                    step.update(
+                        status="failed",
+                        failure_reason=gateway_result.decision.reason,
+                        completed_at=utc_now(),
+                    )
+                    failed += 1
+                    self.store.put_record("mission_runs", mission["mission_id"], mission)
+                    continue
+                command = gateway_result.command
                 step["command_id"] = command["command_id"]
                 step["status"] = "waiting_ack"
                 deadline = time.monotonic() + self.timeout
                 while time.monotonic() < deadline:
-                    current = self.commands.command(command["command_id"])
+                    current = self.gateway.command(command["command_id"])
                     if current and current["phase"] in TERMINAL_PHASES:
                         break
                     time.sleep(0.02)
-                current = self.commands.command(command["command_id"])
+                current = self.gateway.command(command["command_id"])
                 if current and current["phase"] == "confirmed":
                     step["status"] = "confirmed"
                     successful += 1
@@ -83,10 +99,10 @@ class AutomationExecutor:
 
     SUPPORTED_TRIGGERS = {"time", "device_state", "heartbeat_offline", "manual"}
 
-    def __init__(self, store: AlexStore, missions: MissionExecutor, commands: CommandService) -> None:
+    def __init__(self, store: AlexStore, missions: MissionExecutor, gateway: CommandGateway) -> None:
         self.store = store
         self.missions = missions
-        self.commands = commands
+        self.gateway = gateway
 
     def evaluate(self, rule: dict[str, Any], trigger: dict[str, Any]) -> dict[str, Any]:
         started = time.monotonic()
@@ -96,8 +112,6 @@ class AutomationExecutor:
             result["blocked_reason"] = "rule_disabled"
         elif trigger_type not in self.SUPPORTED_TRIGGERS or rule.get("trigger", {}).get("type") != trigger_type:
             result["blocked_reason"] = "trigger_not_matched"
-        elif any(action.get("risk_level") == "restricted" for action in rule.get("actions", []) if isinstance(action, dict)):
-            result["blocked_reason"] = "restricted_action"
         elif not self._conditions_match(rule.get("conditions", [])):
             result["blocked_reason"] = "conditions_not_met"
         else:
@@ -107,6 +121,13 @@ class AutomationExecutor:
                 "steps": rule.get("actions", []),
                 "source": rule.get("source", "local_software"),
             }, "automation")
+            denied_steps = [
+                step for step in result["mission"].get("steps", [])
+                if isinstance(step.get("safety_decision"), dict)
+                and step["safety_decision"].get("allowed") is False
+            ]
+            if denied_steps:
+                result["blocked_reason"] = "safety_policy_denied"
         now = utc_now()
         updated = {**rule, "lastEvaluation": now, "lastRun": now if result["matched"] else rule.get("lastRun"),
                    "blockedReason": result["blocked_reason"], "result": (result["mission"] or {}).get("status"),
@@ -116,7 +137,7 @@ class AutomationExecutor:
         return {**result, "evaluation": updated}
 
     def _conditions_match(self, conditions: list[Any]) -> bool:
-        device = self.commands.device()
+        device = self.gateway.device()
         for condition in conditions:
             if not isinstance(condition, dict):
                 return False

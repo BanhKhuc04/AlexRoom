@@ -104,6 +104,7 @@ class CommandService:
         reported_timeout: float = 3.0,
         max_retries: int = 2,
         heartbeat_timeout: float = 45.0,
+        simulator_mode: bool = False,
     ) -> None:
         self.store = store
         self.publisher = publisher
@@ -112,6 +113,7 @@ class CommandService:
         self.reported_timeout = reported_timeout
         self.max_retries = max_retries
         self.heartbeat_timeout = heartbeat_timeout
+        self.simulator_mode = simulator_mode
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._worker: threading.Thread | None = None
@@ -130,6 +132,7 @@ class CommandService:
             "connection": "unknown",
             "capabilities": ["test_led:set"],
             "risk_level": "safe",
+            "basic_physical_validation": True,
             "reported_state": {"test_led": {"on": False}},
             "desired_state": None,
             "current_command_id": None,
@@ -176,7 +179,8 @@ class CommandService:
             self._transition(command, "cancelled", "command_cancelled", "cancelled_by_user")
             return deepcopy(command)
 
-    def create_test_led_command(self, value: bool, origin: str, source: str = "local_software") -> dict[str, Any]:
+    def _create_test_led_command(self, value: bool, origin: str, source: str) -> dict[str, Any]:
+        """Execute an authorized low-voltage command. Runtime callers use CommandGateway."""
         with self._lock:
             if self._device["connection"] != "online":
                 raise RuntimeError("esp01_offline")
@@ -241,12 +245,16 @@ class CommandService:
         self._transition(command, "waiting_ack", "command_sent")
 
     def handle_ack(self, payload: dict[str, Any], source: str = "mqtt") -> bool:
+        if source == "simulated" and not self.simulator_mode:
+            return False
         if payload.get("protocolVersion") != PROTOCOL_VERSION or payload.get("nodeId") != NODE_ID:
             return False
         command_id = str(payload.get("commandId", ""))
         with self._lock:
             command = self._commands.get(command_id)
             if not command or command["phase"] in TERMINAL_PHASES:
+                return False
+            if (command["source"] == "simulated") != (source == "simulated"):
                 return False
             if command["phase"] in {"accepted", "waiting_reported_state"}:
                 return True
@@ -264,6 +272,8 @@ class CommandService:
             return True
 
     def handle_reported(self, payload: dict[str, Any], source: str = "mqtt") -> bool:
+        if source == "simulated" and not self.simulator_mode:
+            return False
         if payload.get("protocolVersion") != PROTOCOL_VERSION or payload.get("nodeId") != NODE_ID:
             return False
         if payload.get("target") != "test_led" or not isinstance(payload.get("state"), dict):
@@ -279,6 +289,8 @@ class CommandService:
             if not command:
                 self.store.put_device(self._device)
                 self.hub.emit("reported_state", {"node_id": NODE_ID, "target": "test_led", "state": reported}, source)
+                return False
+            if (command["source"] == "simulated") != (source == "simulated"):
                 return False
             if source == "simulated":
                 command["source"] = "simulated"
@@ -299,6 +311,8 @@ class CommandService:
             return True
 
     def handle_heartbeat(self, payload: dict[str, Any], source: str = "mqtt") -> bool:
+        if source == "simulated" and not self.simulator_mode:
+            return False
         if payload.get("protocolVersion") != PROTOCOL_VERSION or payload.get("nodeId") != NODE_ID:
             return False
         now = utc_now()

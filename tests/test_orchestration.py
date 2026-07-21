@@ -8,14 +8,15 @@ from pathlib import Path
 from alex_brain import BrainService
 from alex_hardware import RealtimeHub
 from alex_orchestration import AutomationExecutor, MissionExecutor
+from alex_safety import CapabilityRegistry, CommandGateway, SafetyPolicy
 from alex_store import AlexStore
 
 
-class FakeCommands:
+class FakeCommandService:
     def __init__(self) -> None:
         self.created = []
 
-    def create_test_led_command(self, value, origin, source):
+    def _create_test_led_command(self, value, origin, source):
         command = {"command_id": f"cmd_{len(self.created)}", "phase": "confirmed", "failure_reason": None}
         self.created.append((value, origin, source, command))
         return command
@@ -32,8 +33,9 @@ class OrchestrationTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.store = AlexStore(Path(self.temp.name) / "alex.db")
         self.store.migrate()
-        self.commands = FakeCommands()
-        self.missions = MissionExecutor(self.store, self.commands, timeout=0.1)
+        self.commands = FakeCommandService()
+        self.gateway = CommandGateway(SafetyPolicy(CapabilityRegistry(), simulator_mode=True), self.commands)
+        self.missions = MissionExecutor(self.store, self.gateway, timeout=0.1)
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -41,13 +43,14 @@ class OrchestrationTests(unittest.TestCase):
     def test_mission_partial_failure_is_not_full_success(self) -> None:
         mission = self.missions.run({"name": "study", "source": "simulated", "steps": [
             {"target": "test_led", "action": "set", "value": True, "risk_level": "safe"},
-            {"target": "door_lock", "action": "unlock", "risk_level": "restricted"},
+            {"target": "relay_1", "action": "off", "risk_level": "safe"},
         ]})
         self.assertEqual(mission["status"], "partial")
         self.assertEqual([step["status"] for step in mission["steps"]], ["confirmed", "failed"])
+        self.assertEqual(mission["steps"][1]["failure_reason"], "restricted_capability")
 
     def test_automation_conditions_and_restricted_gate(self) -> None:
-        executor = AutomationExecutor(self.store, self.missions, self.commands)
+        executor = AutomationExecutor(self.store, self.missions, self.gateway)
         safe = executor.evaluate({
             "id": "manual-safe", "name": "manual", "enabled": True,
             "trigger": {"type": "manual"}, "conditions": [{"type": "node_connection", "equals": "online"}],
@@ -58,9 +61,11 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(safe["mission"]["status"], "completed")
         blocked = executor.evaluate({
             "id": "restricted", "enabled": True, "trigger": {"type": "manual"}, "conditions": [],
-            "actions": [{"target": "uv", "action": "on", "risk_level": "restricted"}],
+            "actions": [{"target": "relay_2", "action": "on", "risk_level": "safe"}],
         }, {"type": "manual"})
-        self.assertEqual(blocked["blocked_reason"], "restricted_action")
+        self.assertTrue(blocked["matched"])
+        self.assertEqual(blocked["blocked_reason"], "safety_policy_denied")
+        self.assertEqual(blocked["mission"]["steps"][0]["failure_reason"], "restricted_capability")
 
     def test_wol_magic_packet_and_bounded_confirmation(self) -> None:
         sent = []
