@@ -100,6 +100,7 @@ class AlexOtaService:
         download_url = f"{self.base_url}/api/v1/ota/firmware/{node_id}/{target_version}?token={download_token}"
         
         payload = {
+            "protocolVersion": 1,
             "commandId": operation_id,
             "targetVersion": target_version,
             "url": download_url,

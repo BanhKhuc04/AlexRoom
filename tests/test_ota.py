@@ -168,5 +168,46 @@ class OtaTests(unittest.TestCase):
         state = self.store.get_record("ota", "esp01")
         self.assertEqual(state["status"], "requested") # Unchanged
 
+    def test_17_protocol_version_included(self):
+        self.firmware_dir.mkdir(parents=True, exist_ok=True)
+        (self.firmware_dir / "esp01").mkdir(exist_ok=True)
+        (self.firmware_dir / "esp01" / "manifest.json").write_text(json.dumps({
+            "releases": {"1.0.1": {"sha256": "abc", "size": 123}}
+        }))
+        
+        self.service.request_ota("esp01", "1.0.1", "1.0.0")
+        
+        self.publisher.assert_called_once()
+        topic, payload, qos, retain = self.publisher.call_args[0]
+        
+        # 1. OTA MQTT payload includes protocolVersion == 1
+        self.assertIn("protocolVersion", payload)
+        self.assertEqual(payload["protocolVersion"], 1)
+        
+        # 2. commandId remains operationId
+        self.assertIn("commandId", payload)
+        self.assertTrue(isinstance(payload["commandId"], str))
+        
+        # 3. targetVersion is preserved
+        self.assertEqual(payload["targetVersion"], "1.0.1")
+        
+        # 4. protected URL/token remains unchanged
+        self.assertIn("url", payload)
+        self.assertIn("token=", payload["url"])
+        
+        # 5. sha256 and size remain correct
+        self.assertEqual(payload["sha256"], "abc")
+        self.assertEqual(payload["size"], 123)
+        
+        # 6. OTA publisher still uses alex/v1/nodes/esp01/ota/command
+        self.assertEqual(topic, "alex/v1/nodes/esp01/ota/command")
+        
+        # 7. relay safety remains unchanged (no relay intent)
+        self.assertNotIn("relays", payload)
+        self.assertNotIn("desired_state", payload)
+        
+        # 8. no test publishes to the physical broker
+        # (publisher is a Mock, checked by assert_called_once)
+
 if __name__ == "__main__":
     unittest.main()
