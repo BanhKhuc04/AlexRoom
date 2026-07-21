@@ -22,6 +22,7 @@ REPORTED_TOPIC = f"{TOPIC_ROOT}/reported"
 HEARTBEAT_TOPIC = f"{TOPIC_ROOT}/heartbeat"
 TELEMETRY_TOPIC = f"{TOPIC_ROOT}/telemetry"
 STATUS_TOPIC = f"{TOPIC_ROOT}/status"
+OTA_STATUS_TOPIC = f"{TOPIC_ROOT}/ota/status"
 
 TERMINAL_PHASES = {"confirmed", "failed", "timed_out", "cancelled"}
 LEGACY_VERIFICATION_FIELDS = {

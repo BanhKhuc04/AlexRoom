@@ -347,5 +347,20 @@ class HardwareBootReconciliationTests(unittest.TestCase):
         # It's NOT confirmed.
         self.assertNotEqual(command["phase"], "confirmed")
 
+    def test_9_ota_start_updates_reported_but_leaves_desired(self) -> None:
+        with self.service._lock:
+            self.service._device["desired_state"] = {"test_led": {"on": True}}
+            self.store.put_device(self.service._device)
+            
+        self.service.handle_reported({
+            "protocolVersion": 1, "nodeId": "esp01", "commandId": "ota_start",
+            "target": "test_led", "state": {"on": False}
+        }, "simulated")
+        
+        device = self.service.device()
+        self.assertEqual(device["reported_state"]["test_led"]["on"], False)
+        # Desired state is NOT wiped
+        self.assertEqual(device["desired_state"]["test_led"]["on"], True)
+
 if __name__ == "__main__":
     unittest.main()
