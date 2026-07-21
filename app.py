@@ -417,13 +417,14 @@ async def lifespan(app: FastAPI):
     mqtt_client.connect_async(MQTT_HOST, MQTT_PORT, keepalive=30)
     mqtt_client.loop_start()
     
-    def _on_hub_heartbeat(event: dict[str, Any], source: str) -> None:
-        if source == "simulated" and not ALEX_SIMULATOR:
+    def _on_hub_event(event: dict[str, Any]) -> None:
+        if event.get("type") not in {"heartbeat", "node_online"}:
             return
-        ota_service.evaluate_ota_completion(event)
+        if event.get("source") == "simulated" and not ALEX_SIMULATOR:
+            return
+        ota_service.evaluate_ota_completion(event.get("data", {}))
         
-    realtime_hub.on("heartbeat", _on_hub_heartbeat)
-    realtime_hub.on("node_online", _on_hub_heartbeat)
+    realtime_hub.add_listener(_on_hub_event)
     
     command_service.start()
     automation_scheduler.start()
