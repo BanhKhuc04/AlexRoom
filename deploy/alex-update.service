@@ -1,0 +1,16 @@
+[Unit]
+Description=ALEX NEXUS OS Automatic Git Updater
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env python3 /usr/local/sbin/alex-auto-update
+# Needs root privileges to restart alex-core.service, but the python script
+# will preserve correct ownership of source files using chown.
+User=root
+Group=root
+
+# Add protection
+NoNewPrivileges=true
+PrivateTmp=true

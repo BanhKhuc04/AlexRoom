@@ -235,6 +235,45 @@ instance.
 - MQTT password: xem cấu hình Mosquitto hiện có.
 - Relay và thiết bị 220V: vẫn `RESTRICTED` ở mức phần mềm; không bật trong production cho đến khi hoàn tất Phase 7 và safety interlock vật lý.
 
+## 11. Cài đặt hệ thống Auto-Update
+
+Hệ thống cập nhật tự động (Auto-Update) cho phép Orange Pi tự động tải mã nguồn mới từ Git (`main` branch) và khởi động lại dịch vụ nếu an toàn. 
+
+**Cài đặt:**
+
+```bash
+# 1. Copy script auto-update vào /usr/local/sbin và cấp quyền thực thi
+sudo cp /opt/alex/AlexRoom-0.2.0-hardware-rc/deploy/alex-auto-update.py /usr/local/sbin/alex-auto-update
+sudo chmod +x /usr/local/sbin/alex-auto-update
+
+# 2. Copy systemd unit và timer
+sudo cp /opt/alex/AlexRoom-0.2.0-hardware-rc/deploy/alex-update.service /etc/systemd/system/
+sudo cp /opt/alex/AlexRoom-0.2.0-hardware-rc/deploy/alex-update.timer /etc/systemd/system/
+
+# 3. Kích hoạt timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now alex-update.timer
+```
+
+**Kiểm tra và Xác minh:**
+
+```bash
+# Xem trạng thái timer
+systemctl status alex-update.timer
+
+# Xem danh sách các timer đang chạy
+systemctl list-timers alex-update.timer
+
+# Chạy update thủ công để test (không cần đợi timer)
+sudo /usr/local/sbin/alex-auto-update
+```
+
+**Vô hiệu hoá Auto-Update:**
+
+```bash
+sudo systemctl disable --now alex-update.timer
+```
+
 ---
 
 ## Cấu hình biến môi trường
