@@ -81,7 +81,9 @@ export function createPresenceView() {
   function renderSnapshot(snapshot) {
     elements.contextApi.textContent = snapshot.health.api === "online" ? "ONLINE" : "OFFLINE";
     elements.contextMqtt.textContent = snapshot.health.mqtt === "connected" ? "CONNECTED" : "DISCONNECTED";
-    elements.contextEsp.textContent = (snapshot.v1Device?.connection ?? snapshot.device.availability).toUpperCase();
+    const connection = (snapshot.v1Device?.connection ?? snapshot.device.availability).toUpperCase();
+    const verification = (snapshot.v1Device?.verification_status ?? "unknown").replaceAll("_", " ").toUpperCase();
+    elements.contextEsp.textContent = `${connection} · ${verification}`;
   }
 
   function updateMicrophoneUi() {

@@ -51,12 +51,27 @@ function formatTime(timestamp) {
   return new Date(timestamp).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
 }
 
+/** @param {import("../core/domain").VerificationStatus | undefined} status */
+function formatVerification(status) {
+  const labels = {
+    unknown: "UNKNOWN",
+    simulated: "SIMULATED",
+    software_verified: "SOFTWARE VERIFIED",
+    basic_physical_validated: "BASIC PHYSICAL VALIDATION",
+    hardware_verified: "HARDWARE VERIFIED",
+    restricted: "RESTRICTED",
+  };
+  return status ? labels[status] ?? "UNKNOWN" : "UNKNOWN";
+}
+
 /** @param {SystemSnapshot | null} snapshot */
 function renderOverview(snapshot) {
   const apiOnline = snapshot?.health.api === "online";
   const mqttOnline = snapshot?.health.mqtt === "connected";
   const deviceOnline = snapshot?.v1Device?.connection === "online";
   const ledOn = snapshot?.v1Device?.reported_state.test_led?.on === true;
+  const nodeVerification = formatVerification(snapshot?.v1Device?.verification_status);
+  const ledVerification = formatVerification(snapshot?.v1Device?.capabilities.test_led?.verification_status);
   const events = snapshot?.events.slice(0, 4) ?? [];
 
   return `
@@ -66,12 +81,12 @@ function renderOverview(snapshot) {
         <div class="room-stage" aria-label="Bản đồ cấu hình một phòng">
           <div class="room-zone zone-sleep">NGỦ</div><div class="room-zone zone-work">LÀM VIỆC</div><div class="room-zone zone-green">CÂY XANH</div><div class="room-zone zone-entry">LỐI VÀO</div>
           ${ROOM_LAYOUT.fixtures.map((item) => `<button class="room-fixture ${item.kind} ${item.id === "esp01" && !deviceOnline ? "offline" : ""} ${item.id === "test-led" && ledOn ? "is-lit" : ""}" style="--x:${item.x}%;--y:${item.y}%" type="button" aria-label="${escapeHtml(item.label)}"><i></i><span>${escapeHtml(item.label)}</span>${item.id === "orange-pi" ? `<b>${apiOnline ? "ONLINE" : "OFFLINE"}</b>` : item.id === "esp01" ? `<b>${escapeHtml(snapshot?.v1Device?.connection ?? "UNKNOWN")}</b>` : item.id === "test-led" ? `<b>${ledOn ? "ON" : "OFF"}</b>` : ""}</button>`).join("")}
-          <div class="map-readout"><span>MQTT / ${mqttOnline ? "CONNECTED" : "DISCONNECTED"}</span><span>ESP01 LAST SEEN / ${formatTime(snapshot?.v1Device?.last_seen_at ?? null)}</span><span>LAYOUT / REPORTED STATE ONLY</span></div>
+          <div class="map-readout"><span>MQTT / ${mqttOnline ? "CONNECTED" : "DISCONNECTED"}</span><span>ESP01 VERIFY / ${nodeVerification}</span><span>ESP01 LAST SEEN / ${formatTime(snapshot?.v1Device?.last_seen_at ?? null)}</span><span>LAYOUT / REPORTED STATE ONLY</span></div>
         </div>
       </article>
       <div class="status-stack">
         <article><span>ALEX CORE</span><strong>${apiOnline ? "Operational" : "No signal"}</strong><p>FastAPI · local-first control plane</p><i style="color:${apiOnline ? "var(--alex-emerald)" : "var(--alex-critical)"}"></i></article>
-        <article><span>ESP01 NODE</span><strong>${escapeHtml(snapshot?.v1Device?.connection ?? "Unknown")}</strong><p>test_led · ${ledOn ? "ON CONFIRMED" : "OFF / UNKNOWN"}</p><i style="color:${deviceOnline ? "var(--alex-emerald)" : "var(--alex-amber)"}"></i></article>
+        <article><span>ESP01 NODE</span><strong>${escapeHtml(snapshot?.v1Device?.connection ?? "Unknown")}</strong><p>${nodeVerification} · test_led ${ledVerification}</p><i style="color:${deviceOnline ? "var(--alex-emerald)" : "var(--alex-amber)"}"></i></article>
       </div>
       <article class="workspace-panel event-summary">
         <h3>RECENT SYSTEM EVENTS</h3>
@@ -89,23 +104,28 @@ function renderDevices(snapshot) {
   const online = twin?.connection === "online";
   const reportedOn = twin?.reported_state.test_led?.on === true;
   const desiredOn = twin?.desired_state?.test_led?.on;
+  const ledCapability = twin?.capabilities.test_led;
   const relayNames = snapshot?.config.relay_names ?? {};
   const subtitles = snapshot?.config.relay_subtitles ?? {};
   const relays = snapshot?.device.relays ?? {};
   const cards = [1, 2, 3, 4].map((id) => {
     const key = String(id);
     const state = (relays[key] ?? "UNKNOWN").toUpperCase();
+    const capability = twin?.capabilities[`relay_${id}`];
+    const restricted = capability?.command_allowed !== true;
+    const riskLabel = capability?.risk_level?.toUpperCase() ?? "UNKNOWN";
+    const verificationLabel = formatVerification(capability?.verification_status);
     return `<article class="relay-card" data-relay-card="${id}">
       <header><div><span>ESP01 / RELAY 0${id}</span><h3>${escapeHtml(relayNames[key] ?? `Relay ${id}`)}</h3><p>${escapeHtml(subtitles[key] ?? "GPIO chưa khai báo")}</p></div><b class="relay-state ${state === "ON" ? "on" : ""}">${escapeHtml(state)}</b></header>
-      <div class="relay-actions"><button type="button" disabled>RESTRICTED</button><button type="button" disabled>NOT VERIFIED</button></div>
+      <div class="relay-actions"><button type="button" ${restricted ? "disabled" : ""}>${escapeHtml(riskLabel)}</button><button type="button" ${restricted ? "disabled" : ""}>${escapeHtml(verificationLabel)}</button></div>
     </article>`;
   });
 
   return `<article class="workspace-panel"><h2>ESP01 · Digital twin</h2><p>Chỉ <b>test_led</b> điện áp thấp được mở. Thành công chỉ xuất hiện sau ACK và reported state khớp.</p>
     <div class="device-twin-grid">
-      <article class="relay-card test-led-card"><header><div><span>SAFE TARGET / ${escapeHtml(twin?.source ?? "NO SOURCE")}</span><h3>Test LED</h3><p>${escapeHtml(twin?.friendly_name ?? "ESP01 chưa đăng ký")}</p></div><b class="relay-state ${reportedOn ? "on" : ""}">${reportedOn ? "ON" : "OFF"}</b></header>
-      <dl class="integration-list"><div><dt>CONNECTION</dt><dd>${escapeHtml(twin?.connection ?? "UNKNOWN")}</dd></div><div><dt>DESIRED</dt><dd>${desiredOn == null ? "—" : desiredOn ? "ON" : "OFF"}</dd></div><div><dt>REPORTED</dt><dd>${reportedOn ? "ON" : "OFF"}</dd></div><div><dt>FIRMWARE</dt><dd>${escapeHtml(twin?.firmware ?? "—")}</dd></div><div><dt>RSSI</dt><dd>${twin?.rssi == null ? "—" : `${twin.rssi} dBm`}</dd></div><div><dt>LAST SEEN</dt><dd>${formatTime(twin?.last_seen_at ?? null)}</dd></div><div><dt>COMMAND</dt><dd>${escapeHtml(command?.phase ?? "IDLE")}</dd></div><div><dt>RETRY</dt><dd>${command?.retry_count ?? 0}</dd></div></dl>
-      <div class="relay-actions"><button type="button" data-test-led="true" ${online ? "" : "disabled"}>BẬT LED</button><button type="button" data-test-led="false" ${online ? "" : "disabled"}>TẮT LED</button></div></article>
+      <article class="relay-card test-led-card"><header><div><span>SAFE TARGET / ${escapeHtml(twin?.source ?? "NO SOURCE")}</span><h3>Test LED</h3><p>${formatVerification(ledCapability?.verification_status)} · ${ledCapability?.command_allowed ? "AVAILABLE" : "UNAVAILABLE"}</p></div><b class="relay-state ${reportedOn ? "on" : ""}">${reportedOn ? "ON" : "OFF"}</b></header>
+      <dl class="integration-list"><div><dt>CONNECTION</dt><dd>${escapeHtml(twin?.connection ?? "UNKNOWN")}</dd></div><div><dt>VERIFICATION</dt><dd>${formatVerification(ledCapability?.verification_status)}</dd></div><div><dt>COMMAND</dt><dd>${ledCapability?.command_allowed ? "AVAILABLE" : "LOCKED"}</dd></div><div><dt>DESIRED</dt><dd>${desiredOn == null ? "—" : desiredOn ? "ON" : "OFF"}</dd></div><div><dt>REPORTED</dt><dd>${reportedOn ? "ON" : "OFF"}</dd></div><div><dt>FIRMWARE</dt><dd>${escapeHtml(twin?.firmware ?? "—")}</dd></div><div><dt>RSSI</dt><dd>${twin?.rssi == null ? "—" : `${twin.rssi} dBm`}</dd></div><div><dt>LAST SEEN</dt><dd>${formatTime(twin?.last_seen_at ?? null)}</dd></div><div><dt>PHASE</dt><dd>${escapeHtml(command?.phase ?? "IDLE")}</dd></div><div><dt>RETRY</dt><dd>${command?.retry_count ?? 0}</dd></div></dl>
+      <div class="relay-actions"><button type="button" data-test-led="true" ${online && ledCapability?.command_allowed ? "" : "disabled"}>BẬT LED</button><button type="button" data-test-led="false" ${online && ledCapability?.command_allowed ? "" : "disabled"}>TẮT LED</button></div></article>
     </div><div class="phase-notice"><b>SAFETY</b><span>Bốn relay cũ bị khóa vì chưa có mapping tải và interlock đã xác minh. Không nối 220V, UV, khóa cửa, motor hoặc pump.</span></div><div class="relay-grid legacy-relays">${cards.join("")}</div></article>`;
 }
 

@@ -43,6 +43,6 @@ Tất cả bằng chứng lấy từ localhost chạy thật, không dùng conce
 
 ## Hardware V1 addendum
 
-Software vertical slice `esp01/test_led` đã hoàn tất qua cả simulator nội bộ và MQTT simulator process riêng. Success chỉ xuất hiện sau reported state khớp; screenshot Presence/Command Center là từ localhost thật. Không có ESP8266 vật lý, COM port hoặc PlatformIO trong môi trường, nên `hardware_verified` vẫn luôn false.
+Software vertical slice `esp01/test_led` đã hoàn tất qua simulator nội bộ và MQTT simulator process riêng. Sau báo cáo ban đầu, giao tiếp phần cứng cơ bản với ESP01/test LED cũng đã được xác nhận. Registry hiện ghi capability này là `basic_physical_validated`; toàn node vẫn `hardware_verified=false`, Phase 7 đầy đủ còn ongoing và relay 1–4 chưa được xác minh.
 
 Release candidate mới: `dist-release/AlexRoom-0.2.0-hardware-rc.zip`.

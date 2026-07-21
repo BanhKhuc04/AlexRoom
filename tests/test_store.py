@@ -13,11 +13,17 @@ class AlexStoreTests(unittest.TestCase):
             store = AlexStore(Path(directory) / "alex.db")
             store.migrate()
             store.migrate()
-            self.assertEqual(store.health()["schema_version"], 2)
+            self.assertEqual(store.health()["schema_version"], 3)
             store.put_record("scenes", "study", {"name": "Study", "safety_level": "safe"})
             self.assertEqual(store.records("scenes")[0]["name"], "Study")
-            store.add_audit("test", "verified", "success")
-            self.assertEqual(store.recent_audit(1)[0]["source"], "local_software")
+            details = {
+                "node": "esp01", "capability": "relay_1", "action": "on",
+                "status": "restricted", "risk": "restricted", "reason": "restricted_capability",
+            }
+            store.add_audit("safety_denial", "verified", "warning", details=details)
+            audit = store.recent_audit(1)[0]
+            self.assertEqual(audit["source"], "local_software")
+            self.assertEqual(audit["details"], details)
 
     def test_command_source_and_backup_are_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

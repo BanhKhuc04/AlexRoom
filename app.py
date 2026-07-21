@@ -31,7 +31,7 @@ from alex_hardware import (
 from alex_simulator import Esp01Simulator
 from alex_orchestration import AutomationExecutor, AutomationScheduler, MissionExecutor
 from alex_brain import BrainService
-from alex_safety import CapabilityRegistry, CommandGateway, GatewayResult, SafetyPolicy
+from alex_safety import CapabilityRegistry, CommandGateway, GatewayResult, SafetyDecision, SafetyPolicy
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -138,7 +138,12 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def add_event(kind: str, message: str, level: str = "info") -> None:
+def add_event(
+    kind: str,
+    message: str,
+    level: str = "info",
+    details: dict[str, Any] | None = None,
+) -> None:
     with event_lock:
         events.appendleft(
             {
@@ -146,11 +151,12 @@ def add_event(kind: str, message: str, level: str = "info") -> None:
                 "kind": kind,
                 "message": message,
                 "level": level,
+                "details": details,
             }
         )
     if store_ready.is_set():
         try:
-            store.add_audit(kind, message, level)
+            store.add_audit(kind, message, level, details=details)
         except Exception as error:
             print(f"SQLite audit write failed: {error}")
 
@@ -208,12 +214,25 @@ def _gateway_response_or_denied(result: GatewayResult) -> dict[str, Any]:
     if result.decision.allowed:
         return result.as_dict()
     decision = result.decision.as_dict()
-    add_event(
-        "safety",
-        f"Đã chặn {decision['node_id']}/{decision['capability_id']}/{decision['action']}: {decision['reason']}",
-        "warning",
-    )
     raise HTTPException(status_code=423, detail=decision)
+
+
+def _record_safety_denial(decision: SafetyDecision) -> None:
+    details = {
+        "node": decision.node_id,
+        "capability": decision.capability_id,
+        "action": decision.action,
+        "status": decision.verification_status,
+        "risk": decision.risk_level,
+        "reason": decision.reason,
+        "execution_mode": decision.execution_mode,
+    }
+    add_event(
+        "safety_denial",
+        f"Đã chặn {decision.node_id}/{decision.capability_id}/{decision.action}: {decision.reason}",
+        "warning",
+        details,
+    )
 
 
 def _publish_v1_command(topic: str, payload: str, qos: int, retain: bool) -> bool:
@@ -231,11 +250,38 @@ def _publish_v1_command(topic: str, payload: str, qos: int, retain: bool) -> boo
 capability_registry = CapabilityRegistry()
 safety_policy = SafetyPolicy(capability_registry, simulator_mode=ALEX_SIMULATOR)
 command_service = CommandService(store, _publish_v1_command, realtime_hub, simulator_mode=ALEX_SIMULATOR)
-command_gateway = CommandGateway(safety_policy, command_service)
+command_gateway = CommandGateway(safety_policy, command_service, on_denied=_record_safety_denial)
 mission_executor = MissionExecutor(store, command_gateway)
 automation_executor = AutomationExecutor(store, mission_executor, command_gateway)
 automation_scheduler = AutomationScheduler(store, automation_executor, realtime_hub)
 brain_service = BrainService(store, realtime_hub, BRAIN_MAC, BRAIN_HOST, BRAIN_PORT)
+
+
+def _with_command_verification(command: dict[str, Any]) -> dict[str, Any]:
+    node_id = str(command.get("node_id", "unknown")).lower()
+    capability_id = str(command.get("target", "unknown")).lower()
+    node_truth = capability_registry.get_node_status(node_id)
+    capability_truth = capability_registry.list_capabilities(node_id).get(capability_id)
+    node_summary = (
+        {
+            "node_id": node_truth["node_id"],
+            "verification_status": node_truth["verification_status"],
+            "hardware_verified": node_truth["hardware_verified"],
+        }
+        if node_truth is not None
+        else {
+            "node_id": node_id,
+            "verification_status": "unknown",
+            "hardware_verified": None,
+        }
+    )
+    return {
+        **command,
+        "verification": {
+            "node": node_summary,
+            "capability": capability_truth,
+        },
+    }
 
 
 def on_connect(
@@ -465,6 +511,9 @@ def update_config(
 
 @app.get("/api/devices/esp01")
 def get_esp01() -> dict[str, Any]:
+    registry_truth = capability_registry.get_node_status(DEVICE_ID)
+    if registry_truth is None:
+        raise HTTPException(status_code=503, detail="ESP01 chưa có trong capability registry")
     with state_lock:
         return {
             "device_id": device_state["device_id"],
@@ -472,6 +521,7 @@ def get_esp01() -> dict[str, Any]:
             "last_seen": device_state["last_seen"],
             "mode": device_state["mode"],
             "relays": dict(device_state["relays"]),
+            **registry_truth,
         }
 
 
@@ -596,7 +646,6 @@ def control_all_relays(
         (DEVICE_ID, f"relay_{relay_id}", action) for relay_id in range(1, 5)
     )
     if not all(decision.allowed for decision in decisions):
-        add_event("safety", f"Đã chặn relays-all {action}: relay chưa được xác minh", "warning")
         raise HTTPException(
             status_code=423,
             detail={
@@ -634,13 +683,16 @@ def set_mode(
 
 @app.get("/api/v1/status")
 def v1_status() -> dict[str, Any]:
+    node_truth = capability_registry.get_node_status(DEVICE_ID)
+    if node_truth is None:
+        raise HTTPException(status_code=503, detail="ESP01 chưa có trong capability registry")
     return {
         "api_version": "1",
         "source": "simulated" if ALEX_SIMULATOR else "local_software",
         "simulator": ALEX_SIMULATOR,
         "database": store.health(),
         "mqtt": "connected" if mqtt_connected.is_set() else "disconnected",
-        "hardware_verified": False,
+        "node": node_truth,
         "safety_policy": "central_gateway",
     }
 
@@ -656,7 +708,10 @@ def v1_safety_capabilities() -> dict[str, Any]:
 
 @app.get("/api/v1/devices")
 def v1_devices() -> dict[str, Any]:
-    v1_device = command_service.device()
+    node_truth = capability_registry.get_node_status(DEVICE_ID)
+    if node_truth is None:
+        raise HTTPException(status_code=503, detail="ESP01 chưa có trong capability registry")
+    v1_device = {**command_service.device(), **node_truth}
     with state_lock:
         esp = {
             "id": DEVICE_ID,
@@ -664,11 +719,9 @@ def v1_devices() -> dict[str, Any]:
             "connection": device_state["availability"],
             "reported_state": {"relays": dict(device_state["relays"])},
             "desired_state": None,
-            "capabilities": ["relay:1", "relay:2", "relay:3", "relay:4"],
-            "risk_level": "restricted",
             "last_seen_at": device_state["last_seen"],
             "source": "mqtt_reported_state",
-            "hardware_verified": False,
+            **node_truth,
         }
     return {"items": [v1_device, esp], "simulator": ALEX_SIMULATOR}
 
@@ -695,16 +748,18 @@ def v1_command(
     if command is None:
         raise HTTPException(status_code=500, detail="Gateway không tạo command")
     return {
-        **command,
+        **_with_command_verification(command),
         "safety_decision": response["decision"],
         "simulated": ALEX_SIMULATOR,
-        "hardware_verified": False,
     }
 
 
 @app.get("/api/v1/commands")
 def v1_commands(limit: int = 50) -> dict[str, Any]:
-    return {"items": command_service.recent_commands(limit), "source": "sqlite"}
+    return {
+        "items": [_with_command_verification(command) for command in command_service.recent_commands(limit)],
+        "source": "sqlite",
+    }
 
 
 @app.get("/api/v1/commands/{command_id}")
@@ -712,7 +767,7 @@ def v1_command_detail(command_id: str) -> dict[str, Any]:
     command = command_service.command(command_id)
     if command is None:
         raise HTTPException(status_code=404, detail="Command không tồn tại")
-    return {**command, "events": store.command_events(command_id), "hardware_verified": False}
+    return {**_with_command_verification(command), "events": store.command_events(command_id)}
 
 
 @app.post("/api/v1/commands/{command_id}/cancel")
@@ -720,7 +775,10 @@ def v1_cancel_command(command_id: str, _: None = Depends(require_mutation_budget
     command = command_service.cancel(command_id)
     if command is None:
         raise HTTPException(status_code=404, detail="Command không tồn tại")
-    return {**command, "note": "MQTT đã phát không thể bị thu hồi; ACK/reported muộn không tạo success"}
+    return {
+        **_with_command_verification(command),
+        "note": "MQTT đã phát không thể bị thu hồi; ACK/reported muộn không tạo success",
+    }
 
 
 @app.get("/api/v1/realtime")

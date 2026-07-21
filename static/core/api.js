@@ -42,14 +42,17 @@ export class AlexApi {
       });
       if (!response.ok) {
         let message = `HTTP ${response.status}`;
+        /** @type {string | {reason?: string, risk_level?: string, verification_status?: string} | null} */
+        let detail = null;
         try {
-          const payload = /** @type {{detail?: string | {reason?: string}}} */ (await response.json());
+          const payload = /** @type {{detail?: string | {reason?: string, risk_level?: string, verification_status?: string}}} */ (await response.json());
+          detail = payload.detail ?? null;
           message = typeof payload.detail === "string" ? payload.detail : payload.detail?.reason ?? message;
         } catch {
           // The status code remains the safest available error message.
         }
         const error = new Error(message);
-        Object.assign(error, { status: response.status });
+        Object.assign(error, { status: response.status, detail });
         throw error;
       }
       return await response.json();

@@ -79,12 +79,15 @@ export function createPresenceCommands(options) {
         await delay(620);
         const mqtt = snapshot.health.mqtt === "connected" ? "MQTT đã kết nối" : "MQTT đang ngắt kết nối";
         const coreOnly = normalized.includes("alex core") || normalized.includes("core local");
+        const espConnection = snapshot.v1Device?.connection ?? snapshot.device.availability;
+        const verification = (snapshot.v1Device?.verification_status ?? "unknown").replaceAll("_", " ").toUpperCase();
+        const nodeClaim = snapshot.v1Device?.hardware_verified ? "node hardware verified" : "node chưa hardware verified";
         const confirmed = snapshot.health.api === "online"
           && snapshot.health.mqtt === "connected"
-          && (coreOnly || snapshot.device.availability === "online");
+          && (coreOnly || espConnection === "online");
         options.view.showMicroResponse(coreOnly
           ? `Alex Core online; ${mqtt}. Phép kiểm tra này không khẳng định trạng thái ESP01.`
-          : `Alex Core online; ${mqtt}; ESP01 ${snapshot.device.availability}.`);
+          : `Alex Core online; ${mqtt}; ESP01 ${espConnection}; ${verification}; ${nodeClaim}.`);
         options.setVisualState(confirmed ? "success" : "warning");
       }
       options.scheduleIdle();

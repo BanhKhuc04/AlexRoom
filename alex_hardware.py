@@ -24,6 +24,10 @@ TELEMETRY_TOPIC = f"{TOPIC_ROOT}/telemetry"
 STATUS_TOPIC = f"{TOPIC_ROOT}/status"
 
 TERMINAL_PHASES = {"confirmed", "failed", "timed_out", "cancelled"}
+LEGACY_VERIFICATION_FIELDS = {
+    "capabilities", "risk_level", "basic_physical_validation",
+    "verification_status", "hardware_verified",
+}
 
 
 def epoch_ms() -> int:
@@ -130,14 +134,10 @@ class CommandService:
             "rssi": None,
             "last_seen_at": None,
             "connection": "unknown",
-            "capabilities": ["test_led:set"],
-            "risk_level": "safe",
-            "basic_physical_validation": True,
             "reported_state": {"test_led": {"on": False}},
             "desired_state": None,
             "current_command_id": None,
             "source": "mqtt",
-            "hardware_verified": False,
         }
 
     def start(self) -> None:
@@ -146,6 +146,8 @@ class CommandService:
         if saved:
             self._device.update(saved)
             self._device["connection"] = "unknown"
+        for field in LEGACY_VERIFICATION_FIELDS:
+            self._device.pop(field, None)
         self._stop.clear()
         self._worker = threading.Thread(target=self._watch, name="alex-command-watch", daemon=True)
         self._worker.start()
@@ -325,7 +327,6 @@ class CommandService:
                 "last_seen_at": now,
                 "connection": "online" if payload.get("online") is True else "offline",
                 "source": source,
-                "hardware_verified": False,
                 "last_seen_monotonic": time.monotonic(),
             })
             self.store.put_device(self._device)

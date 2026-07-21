@@ -1,6 +1,33 @@
 export type ConnectionState = "online" | "degraded" | "offline" | "unknown";
 export type AppMode = "presence" | "command";
 export type RoomMode = "home" | "away" | "sleep" | "study";
+export type VerificationStatus =
+  | "unknown"
+  | "simulated"
+  | "software_verified"
+  | "basic_physical_validated"
+  | "hardware_verified"
+  | "restricted";
+
+export interface CapabilityStatus {
+  node_id: string;
+  capability_id: string;
+  risk_level: "safe" | "controlled" | "restricted" | "unknown";
+  supported_actions: string[];
+  verification_status: VerificationStatus;
+  basic_physical_validation: boolean;
+  hardware_verified: boolean;
+  command_allowed: boolean;
+  allowed_modes: string[];
+  restriction_reason: string | null;
+}
+
+export interface NodeVerification {
+  node_id: string;
+  verification_status: VerificationStatus;
+  hardware_verified: boolean;
+  capabilities: Record<string, CapabilityStatus>;
+}
 
 export interface HealthPayload {
   api: string;
@@ -15,7 +42,7 @@ export interface ConfigPayload {
   relay_subtitles: Record<string, string>;
 }
 
-export interface DevicePayload {
+export interface DevicePayload extends NodeVerification {
   device_id: string;
   availability: string;
   last_seen: string | null;
@@ -37,6 +64,7 @@ export interface EventItem {
   kind: string;
   message: string;
   level: string;
+  details: Record<string, unknown> | null;
 }
 
 export interface SystemSnapshot {
@@ -50,7 +78,7 @@ export interface SystemSnapshot {
   receivedAt: string;
 }
 
-export interface V1Device {
+export interface V1Device extends NodeVerification {
   node_id: string;
   friendly_name: string;
   firmware: string | null;
@@ -58,13 +86,10 @@ export interface V1Device {
   rssi: number | null;
   last_seen_at: string | null;
   connection: ConnectionState;
-  capabilities: string[];
-  risk_level: "safe" | "controlled" | "restricted";
   reported_state: { test_led?: { on: boolean } };
   desired_state: { test_led?: { on: boolean } } | null;
   current_command_id: string | null;
   source: string;
-  hardware_verified: boolean;
 }
 
 export interface V1Command {
@@ -85,4 +110,8 @@ export interface V1Command {
   retry_count: number;
   failure_reason: string | null;
   ack_status: string | null;
+  verification: {
+    node: Omit<NodeVerification, "capabilities">;
+    capability: CapabilityStatus | null;
+  };
 }

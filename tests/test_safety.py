@@ -32,13 +32,16 @@ class CentralSafetyPolicyTests(unittest.TestCase):
         led = self.registry.capability("esp01", "test_led")
         self.assertIsNotNone(node)
         self.assertIsNotNone(led)
+        self.assertEqual(node.verification_status, "basic_physical_validated")
         self.assertFalse(node.hardware_verified)
+        self.assertEqual(led.verification_status, "basic_physical_validated")
         self.assertTrue(led.basic_physical_validation)
         self.assertFalse(led.hardware_verified)
         self.assertTrue(led.command_allowed)
         for relay_id in range(1, 5):
             relay = self.registry.capability("esp01", f"relay_{relay_id}")
             self.assertEqual(relay.risk_level, "restricted")
+            self.assertEqual(relay.verification_status, "restricted")
             self.assertFalse(relay.hardware_verified)
             self.assertFalse(relay.command_allowed)
 
@@ -51,7 +54,7 @@ class CentralSafetyPolicyTests(unittest.TestCase):
                 )
                 self.assertFalse(result.decision.allowed)
                 self.assertEqual(result.decision.reason, "restricted_capability")
-                self.assertEqual(result.decision.verification_status, "not_hardware_verified")
+                self.assertEqual(result.decision.verification_status, "restricted")
         self.assertEqual(self.service.created, [])
 
     def test_client_risk_metadata_cannot_change_server_policy(self) -> None:
@@ -70,7 +73,7 @@ class CentralSafetyPolicyTests(unittest.TestCase):
             payload={"value": True}, origin="test",
         )
         self.assertTrue(result.decision.allowed)
-        self.assertEqual(result.decision.verification_status, "basic_physical_validation")
+        self.assertEqual(result.decision.verification_status, "basic_physical_validated")
         self.assertFalse(result.decision.node_hardware_verified)
         self.assertEqual(self.service.created, [(True, "test", "local_software")])
 
@@ -80,25 +83,25 @@ class CentralSafetyPolicyTests(unittest.TestCase):
         self.assertEqual(self.policy.authorize("esp01", "test_led", "toggle").reason, "action_not_supported")
 
         def policy_for(capability: Capability, *, simulator_mode: bool = False) -> SafetyPolicy:
-            node = NodeCapabilities("esp01", False, {capability.capability_id: capability})
+            node = NodeCapabilities("esp01", "software_verified", {capability.capability_id: capability})
             return SafetyPolicy(CapabilityRegistry({"esp01": node}), simulator_mode=simulator_mode)
 
         base = {
             "node_id": "esp01", "capability_id": "safe_output", "risk_level": "safe",
-            "supported_actions": frozenset({"set"}), "hardware_verified": False,
+            "supported_actions": frozenset({"set"}),
         }
         unverified = Capability(
-            **base, basic_physical_validation=False, command_allowed=True,
+            **base, verification_status="software_verified", command_allowed=True,
             allowed_modes=frozenset({"hardware"}),
         )
         self.assertEqual(policy_for(unverified).authorize("esp01", "safe_output", "set").reason, "capability_not_verified")
         not_permitted = Capability(
-            **base, basic_physical_validation=True, command_allowed=False,
+            **base, verification_status="basic_physical_validated", command_allowed=False,
             allowed_modes=frozenset({"hardware"}),
         )
         self.assertEqual(policy_for(not_permitted).authorize("esp01", "safe_output", "set").reason, "command_not_allowed")
         hardware_only = Capability(
-            **base, basic_physical_validation=True, command_allowed=True,
+            **base, verification_status="basic_physical_validated", command_allowed=True,
             allowed_modes=frozenset({"hardware"}),
         )
         self.assertEqual(
@@ -117,6 +120,22 @@ class CentralSafetyPolicyTests(unittest.TestCase):
         )
         self.assertTrue(all(not decision.allowed for decision in decisions))
         self.assertEqual(simulator_service.created, [])
+
+    def test_public_registry_snapshot_is_machine_readable(self) -> None:
+        node = self.registry.get_node_status("esp01")
+        self.assertEqual(node["verification_status"], "basic_physical_validated")
+        self.assertFalse(node["hardware_verified"])
+        self.assertEqual(node["capabilities"]["test_led"]["verification_status"], "basic_physical_validated")
+        self.assertEqual(node["capabilities"]["relay_4"]["verification_status"], "restricted")
+
+    def test_gateway_emits_structured_decision_for_every_denial(self) -> None:
+        denied = []
+        gateway = CommandGateway(self.policy, self.service, on_denied=denied.append)
+        result = gateway.request(
+            node_id="esp01", capability_id="relay_2", action="on", payload={}, origin="test",
+        )
+        self.assertFalse(result.decision.allowed)
+        self.assertEqual(denied, [result.decision])
 
 
 if __name__ == "__main__":

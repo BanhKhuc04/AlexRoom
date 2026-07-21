@@ -1,15 +1,15 @@
 /// <reference lib="webworker" />
 
-const CACHE = "alex-nexus-mark3-hardware-v3";
+const CACHE = "alex-nexus-mark3-safety-v4";
 const APP_SHELL = [
   "/",
-  "/static/styles.css?v=hardware-v3",
-  "/static/styles/tokens.css?v=hardware-v3",
-  "/static/styles/base.css?v=hardware-v3",
-  "/static/styles/presence.css?v=hardware-v3",
-  "/static/styles/command-center.css?v=hardware-v3",
-  "/static/styles/responsive.css?v=hardware-v3",
-  "/static/app.js?v=hardware-v3",
+  "/static/styles.css?v=safety-v4",
+  "/static/styles/tokens.css?v=safety-v4",
+  "/static/styles/base.css?v=safety-v4",
+  "/static/styles/presence.css?v=safety-v4",
+  "/static/styles/command-center.css?v=safety-v4",
+  "/static/styles/responsive.css?v=safety-v4",
+  "/static/app.js?v=safety-v4",
   "/static/core/audio-waveform.js",
   "/static/core/core-renderer.js",
   "/static/core/core-visuals.js",

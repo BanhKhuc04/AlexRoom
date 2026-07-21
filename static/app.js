@@ -380,8 +380,13 @@ async function executeRelayCommand(relayId, action) {
     throw new Error("SafetyPolicy không trả về kết quả từ chối như dự kiến.");
   } catch (error) {
     const detail = error instanceof Error ? error.message : "restricted_capability";
-    const reason = detail === "restricted_capability"
-      ? `Relay ${relayId} bị khóa: RESTRICTED / NOT HARDWARE VERIFIED.`
+    const safetyDecision = error instanceof Error && "detail" in error && typeof error.detail === "object"
+      ? /** @type {{risk_level?: string, verification_status?: string, reason?: string}} */ (error.detail)
+      : null;
+    const risk = safetyDecision?.risk_level?.replaceAll("_", " ").toUpperCase();
+    const verification = safetyDecision?.verification_status?.replaceAll("_", " ").toUpperCase();
+    const reason = safetyDecision
+      ? `Relay ${relayId} bị khóa: ${risk ?? "UNKNOWN"} / ${verification ?? "UNKNOWN"} (${safetyDecision.reason ?? detail}).`
       : detail;
     command = transitionCommand(command, "failed", { failureReason: reason });
     renderCommandTrace(command);

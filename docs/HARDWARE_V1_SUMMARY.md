@@ -4,7 +4,7 @@
 
 Phần mềm cho lát cắt phần cứng V1 `esp01/test_led` đã hoàn thành và vượt qua các kiểm tra build, lint, typecheck, unit test, API smoke, MQTT integration và browser smoke. Luồng lệnh không hiển thị thành công giả: trạng thái chỉ chuyển sang `confirmed` sau khi backend nhận được `reported state` phù hợp.
 
-Phần cứng ESP8266 thật chưa được nạp và kiểm thử vì môi trường hiện tại không có PlatformIO, thiết bị ESP hoặc cổng COM. Mọi kết quả MQTT hiện tại đều được ghi rõ nguồn `simulated`.
+Sau báo cáo RC ban đầu, giao tiếp phần cứng cơ bản với ESP01 và LED thử nghiệm đã được xác nhận. Trạng thái chính thức hiện tại là `basic_physical_validated` cho `test_led`; đây không phải xác minh toàn node và không hoàn tất Phase 7. Relay 1–4 vẫn `restricted`, chưa được xác minh và không được phép gửi lệnh.
 
 ## Kiến trúc và luồng lệnh
 
@@ -22,13 +22,13 @@ Phần cứng ESP8266 thật chưa được nạp và kiểm thử vì môi trư
 ## Những phần đã hoàn thành
 
 - Thêm command service, realtime hub, retry có giới hạn, heartbeat và digital twin.
-- Thêm SQLite schema v2 cho command history, command events và device registry.
+- Thêm SQLite schema v3 cho command history, command events, device registry và structured safety audit.
 - Thêm simulator nội bộ và simulator MQTT chạy như một tiến trình riêng.
 - Thêm firmware ESP01 với trạng thái boot an toàn `OFF`, reconnect backoff, LWT, heartbeat, ACK, reported state và chống xử lý trùng lệnh.
 - Presence hiểu lệnh “Alex, bật/tắt đèn thử.”
 - Command Center hiển thị connection, desired state, reported state, firmware, RSSI, last seen, command và số lần retry.
 - Spatial Home có marker Test LED phản ánh `reported state`.
-- Bốn relay cũ bị khóa với nhãn `RESTRICTED / NOT VERIFIED`.
+- Bốn relay cũ bị khóa theo registry với trạng thái `restricted` và `hardware_verified=false`.
 - SSE tự reconnect theo backoff, tạm dừng khi tab bị ẩn và dọn tài nguyên khi unmount.
 - Giữ tương thích các route API v0.3 hiện có.
 
@@ -48,8 +48,10 @@ Phần cứng ESP8266 thật chưa được nạp và kiểm thử vì môi trư
 | Desktop browser smoke | PASS |
 | Mobile 390×844 | PASS — không tràn ngang |
 | Console ổn định | PASS — 0 warning/error |
-| Firmware compile/flash | CHƯA CHẠY |
-| Kiểm thử ESP8266 thật | CHƯA CHẠY |
+| Giao tiếp phần cứng cơ bản ESP01 | PASS trước Step 1.3 |
+| LED thử nghiệm vật lý | BASIC PHYSICAL VALIDATION |
+| Phase 7 đầy đủ | ĐANG TIẾP TỤC |
+| Relay 1–4 | RESTRICTED / CHƯA XÁC MINH |
 
 Các safety gate đã được xác minh ở mức phần mềm:
 
@@ -67,17 +69,16 @@ Các safety gate đã được xác minh ở mức phần mềm:
 - Luồng command/ACK/reported state qua broker Mosquitto thật.
 - Retry, timeout, reconnect, command history và digital twin.
 
-### Đang mô phỏng
+### Chế độ mô phỏng vẫn được hỗ trợ
 
-- Node `esp01` và LED thử nghiệm.
-- ACK, heartbeat, telemetry và reported state của thiết bị.
-- Các kết quả mô phỏng đều mang nguồn `simulated`; production không fallback ngầm sang thành công giả.
+- Simulator có thể tạo ACK, heartbeat, telemetry và reported state cho kiểm thử lỗi.
+- Các kết quả mô phỏng mang nguồn `simulated`; production không fallback ngầm sang thành công giả.
+- Simulator không thay đổi mức xác minh chính thức trong `CapabilityRegistry`.
 
 ### Chưa được xác minh
 
-- Build firmware bằng PlatformIO.
-- Flash firmware lên ESP8266 thật.
-- Kết nối Wi-Fi/MQTT và điều khiển LED vật lý.
+- Toàn bộ checklist Phase 7, bao gồm power-cycle, reconnect, duplicate, timeout và soak dài hạn.
+- Xác minh toàn node ESP01 ở mức `hardware_verified`.
 - Độ ổn định dài hạn của thiết bị và broker trên Orange Pi.
 - Mọi thiết bị điện áp cao hoặc thiết bị nguy hiểm.
 
@@ -104,4 +105,4 @@ Gói ZIP đã được kiểm tra và không chứa `.env`, database hoặc file
 
 ## Bước tiếp theo duy nhất
 
-Kết nối ESP8266 NodeMCU qua USB và xác định chính xác cổng COM, sau đó cài PlatformIO, build/flash firmware và thực hiện checklist trong `docs/ESP01_TEST_PLAN.md`. Chỉ sau khi kiểm thử này PASS mới được đổi trạng thái từ “software verified/simulated” sang “hardware verified”.
+Tiếp tục checklist Phase 7 trong `docs/ESP01_TEST_PLAN.md`, đặc biệt power-cycle, reconnect, duplicate command, timeout và soak. Chỉ sau khi toàn bộ checklist PASS mới được đổi trạng thái node từ `basic_physical_validated` sang `hardware_verified`; relay vẫn cần quy trình xác minh và interlock riêng.

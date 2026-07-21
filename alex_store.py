@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def utc_now() -> str:
@@ -49,7 +49,8 @@ class AlexStore:
                 CREATE TABLE IF NOT EXISTS audit_events (
                   id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL,
                   kind TEXT NOT NULL, level TEXT NOT NULL, message TEXT NOT NULL,
-                  source TEXT NOT NULL DEFAULT 'local_software'
+                  source TEXT NOT NULL DEFAULT 'local_software',
+                  detail_json TEXT
                 );
                 CREATE TABLE IF NOT EXISTS commands (
                   command_id TEXT PRIMARY KEY, target TEXT NOT NULL, action TEXT NOT NULL,
@@ -92,27 +93,47 @@ class AlexStore:
             for column, definition in additions.items():
                 if column not in existing:
                     db.execute(f"ALTER TABLE commands ADD COLUMN {column} {definition}")
+            audit_columns = {row[1] for row in db.execute("PRAGMA table_info(audit_events)").fetchall()}
+            if "detail_json" not in audit_columns:
+                db.execute("ALTER TABLE audit_events ADD COLUMN detail_json TEXT")
             db.execute(
                 "INSERT INTO metadata(key,value) VALUES('schema_version',?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (str(SCHEMA_VERSION),),
             )
 
-    def add_audit(self, kind: str, message: str, level: str, source: str = "local_software") -> None:
+    def add_audit(
+        self,
+        kind: str,
+        message: str,
+        level: str,
+        source: str = "local_software",
+        details: dict[str, Any] | None = None,
+    ) -> None:
         with self._lock, self.session() as db:
             db.execute(
-                "INSERT INTO audit_events(created_at,kind,level,message,source) VALUES(?,?,?,?,?)",
-                (utc_now(), kind, level, message, source),
+                "INSERT INTO audit_events(created_at,kind,level,message,source,detail_json) VALUES(?,?,?,?,?,?)",
+                (utc_now(), kind, level, message, source, json.dumps(details, ensure_ascii=False) if details else None),
             )
 
     def recent_audit(self, limit: int = 80) -> list[dict[str, Any]]:
         bounded = max(1, min(200, limit))
         with self._lock, self.session() as db:
             rows = db.execute(
-                "SELECT created_at,kind,level,message,source FROM audit_events ORDER BY id DESC LIMIT ?",
+                "SELECT created_at,kind,level,message,source,detail_json FROM audit_events ORDER BY id DESC LIMIT ?",
                 (bounded,),
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [
+            {
+                "created_at": row["created_at"],
+                "kind": row["kind"],
+                "level": row["level"],
+                "message": row["message"],
+                "source": row["source"],
+                "details": json.loads(row["detail_json"]) if row["detail_json"] else None,
+            }
+            for row in rows
+        ]
 
     def put_record(self, domain: str, record_id: str, body: dict[str, Any]) -> None:
         with self._lock, self.session() as db:

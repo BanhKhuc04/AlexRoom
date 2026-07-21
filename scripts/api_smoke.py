@@ -45,7 +45,8 @@ while time.monotonic() < deadline:
     time.sleep(0.03)
 assert status == 200 and final["phase"] == "confirmed", final
 assert final["desired_state"] == final["reported_state"]
-assert final["hardware_verified"] is False
+assert final["verification"]["node"]["hardware_verified"] is False
+assert final["verification"]["capability"]["verification_status"] == "basic_physical_validated"
 
 restricted_status, _ = request("/api/v1/commands", "POST", {
     "target": "uv", "action": "set", "payload": {"value": True}, "risk_level": "restricted",
