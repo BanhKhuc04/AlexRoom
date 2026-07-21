@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 from alex_store import AlexStore, utc_now
 from alex_hardware import (
     ACK_TOPIC, COMMAND_TOPIC, HEARTBEAT_TOPIC, REPORTED_TOPIC, STATUS_TOPIC, TELEMETRY_TOPIC, OTA_STATUS_TOPIC,
-    CommandService, RealtimeHub,
+    OTA_COMMAND_TOPIC, CommandService, RealtimeHub,
 )
 from alex_simulator import Esp01Simulator
 from alex_orchestration import AutomationExecutor, AutomationScheduler, MissionExecutor
@@ -254,6 +254,24 @@ def _publish_v1_command(topic: str, payload: str, qos: int, retain: bool) -> boo
     return result.rc == mqtt.MQTT_ERR_SUCCESS
 
 
+def _publish_ota_command(topic: str, payload: str | dict, qos: int, retain: bool) -> bool:
+    if topic != OTA_COMMAND_TOPIC:
+        add_event("safety", f"OTA Transport từ chối topic ngoài OTA command: {topic}", "warning")
+        return False
+    if simulator is not None:
+        return simulator.publish(topic, payload, qos, retain)
+    if not mqtt_connected.is_set():
+        return False
+    
+    if isinstance(payload, dict):
+        payload_str = json.dumps(payload)
+    else:
+        payload_str = payload
+
+    result = mqtt_client.publish(topic, payload_str, qos=qos, retain=retain)
+    return result.rc == mqtt.MQTT_ERR_SUCCESS
+
+
 capability_registry = CapabilityRegistry()
 safety_policy = SafetyPolicy(capability_registry, simulator_mode=ALEX_SIMULATOR)
 command_service = CommandService(store, _publish_v1_command, realtime_hub, simulator_mode=ALEX_SIMULATOR)
@@ -264,7 +282,7 @@ automation_scheduler = AutomationScheduler(store, automation_executor, realtime_
 brain_service = BrainService(store, realtime_hub, BRAIN_MAC, BRAIN_HOST, BRAIN_PORT)
 ota_service = AlexOtaService(
     store=store,
-    publisher=_publish_v1_command,
+    publisher=_publish_ota_command,
     firmware_dir=ALEX_FIRMWARE_DIR,
     base_url=ALEX_OTA_BASE_URL,
     token_ttl_seconds=ALEX_OTA_TOKEN_TTL_SECONDS,
