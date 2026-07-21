@@ -24,3 +24,6 @@ ALEX_NEXUS_UI_v0.4/
 ALEX_NEXUS_OS_MARK_II_v2.0/
 ALEX_NEXUS_OS_MARK_II_v2.0.1_FIXED/
 CODEX_*.txt
+
+# Local/generated reports
+report/
