@@ -40,13 +40,17 @@ class Harness:
     def __init__(self, mode, execute_safe):
         self.mode = mode
         self.execute_safe = execute_safe
-        self.client = mqtt.Client(client_id=f"alex-harness-{int(time.time())}")
+        
+        # Use Paho MQTT API v2 to resolve deprecation warnings
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"alex-harness-{int(time.time())}")
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
+        
         username = os.environ.get("MQTT_USERNAME", "alex_core")
         password = os.environ.get("MQTT_PASSWORD")
         if password:
             self.client.username_pw_set(username, password)
+            
         self.events = []
         self.started_at = utc_now_iso()
         self.state = {
@@ -58,13 +62,19 @@ class Harness:
             "recovery_time": None
         }
         self.done = False
+        self.connected_once = False
 
-    def on_connect(self, client, userdata, flags, rc):
-        print("[MQTT] Connected to broker")
-        self.client.subscribe(f"alex/v1/nodes/{NODE_ID}/status")
-        self.client.subscribe(f"alex/v1/nodes/{NODE_ID}/heartbeat")
-        self.client.subscribe(f"alex/v1/nodes/{NODE_ID}/reported")
-        self.client.subscribe(f"alex/v1/nodes/{NODE_ID}/ack")
+    def on_connect(self, client, userdata, flags, reason_code, properties):
+        if reason_code == 0:
+            if not self.connected_once:
+                print("[MQTT] Connected to broker")
+                self.connected_once = True
+            self.client.subscribe(f"alex/v1/nodes/{NODE_ID}/status")
+            self.client.subscribe(f"alex/v1/nodes/{NODE_ID}/heartbeat")
+            self.client.subscribe(f"alex/v1/nodes/{NODE_ID}/reported")
+            self.client.subscribe(f"alex/v1/nodes/{NODE_ID}/ack")
+        else:
+            print(f"[MQTT] Connect failed with reason code {reason_code}")
 
     def on_message(self, client, userdata, msg):
         topic = msg.topic
@@ -106,26 +116,67 @@ class Harness:
         esp = None
         if "items" in devices:
             for item in devices["items"]:
-                if item.get("id") == NODE_ID:
+                # TASK 1: Canonical V1 device selection by node_id
+                if item.get("node_id") == NODE_ID:
                     esp = item
                     break
                     
         print(f"Device: {json.dumps(esp)}")
         
-        if esp:
-            print("hardware_verified:", esp.get("hardware_verified"))
-            caps = esp.get("capabilities", {})
-            for r in ["relay_1", "relay_2", "relay_3", "relay_4"]:
-                rc = caps.get(r, {})
-                print(f"{r} status: {rc.get('verification_status')} allowed: {rc.get('command_allowed')}")
-                
+        # Connect and observe
         self.client.connect(MQTT_HOST, MQTT_PORT, 60)
         self.client.loop_start()
-        print("Waiting 12 seconds for a heartbeat...")
+        print("Waiting up to 12 seconds for a heartbeat...")
         time.sleep(12)
         self.client.loop_stop()
+        self.client.disconnect()
         
-        self.save_report("baseline_check", esp, health)
+        # TASK 4 & 5: Baseline Pass Rules
+        reasons = []
+        
+        if health.get("api") != "online":
+            reasons.append("Health API is not online")
+        if health.get("mqtt") != "connected":
+            reasons.append("Health MQTT is not connected")
+            
+        if not esp:
+            reasons.append("Canonical ESP01 record missing")
+        else:
+            if esp.get("node_id") != NODE_ID:
+                reasons.append("Device node_id mismatch")
+            if esp.get("connection") != "online":
+                reasons.append("Device connection is not online")
+            if not esp.get("firmware"):
+                reasons.append("Device firmware is empty")
+            if esp.get("hardware_verified") is not False:
+                reasons.append("hardware_verified must be false")
+                
+            caps = esp.get("capabilities", {})
+            test_led = caps.get("test_led", {})
+            if test_led.get("verification_status") != "basic_physical_validated" or not test_led.get("command_allowed"):
+                reasons.append("test_led permissions invalid")
+                
+            for r in ["relay_1", "relay_2", "relay_3", "relay_4"]:
+                rc = caps.get(r, {})
+                if rc.get("verification_status") != "restricted" or rc.get("command_allowed") is not False:
+                    reasons.append(f"{r} safety truth invalid")
+
+        if self.state["heartbeats"] < 1:
+            reasons.append("No heartbeat observed within timeout")
+            
+        is_pass = len(reasons) == 0
+        
+        result_str = "PHYSICAL_PASS" if is_pass else "FAIL"
+        self.save_report("baseline_check", esp, health, result_str)
+        
+        if is_pass:
+            print("BASELINE PASS")
+            sys.exit(0)
+        else:
+            print("BASELINE FAIL")
+            for r in reasons:
+                print(f" - {r}")
+            sys.exit(1)
 
     def run_watch_recovery(self):
         print("=== WATCH RECOVERY ===")
@@ -137,14 +188,26 @@ class Harness:
         
         phase = "wait_initial_online"
         t0 = time.time()
-        offline_time = None
-        recovery_start = None
+        
+        offline_detection_time = None
+        online_restoration_time = None
+        last_heartbeat_before_loss = None
+        first_heartbeat_after_recovery = None
         
         try:
             while True:
                 time.sleep(1)
-                health = fetch_health()
-                is_online = health.get("device") == "online"
+                
+                # Fetch authoritative status from API, not just MQTT status topic
+                devices = fetch_devices()
+                is_online = False
+                esp = None
+                if "items" in devices:
+                    for item in devices["items"]:
+                        if item.get("node_id") == NODE_ID:
+                            esp = item
+                            is_online = (item.get("connection") == "online")
+                            break
                 
                 if phase == "wait_initial_online":
                     if is_online:
@@ -152,13 +215,17 @@ class Harness:
                         phase = "wait_offline"
                 elif phase == "wait_offline":
                     if not is_online:
-                        offline_time = time.time()
+                        offline_detection_time = time.time()
+                        last_heartbeat_before_loss = self.state["last_heartbeat"]
                         print(f"[{utc_now_iso()}] ALEX API reported OFFLINE")
+                        self.state["heartbeats"] = 0 # reset to track first heartbeat after
                         phase = "wait_recovery"
                 elif phase == "wait_recovery":
                     if is_online:
-                        recovery_time = time.time() - offline_time
+                        online_restoration_time = time.time()
+                        recovery_time = online_restoration_time - offline_detection_time
                         self.state["recovery_time"] = recovery_time
+                        first_heartbeat_after_recovery = self.state["last_heartbeat"]
                         print(f"[{utc_now_iso()}] ALEX API reported ONLINE. Recovery took {recovery_time:.2f}s")
                         break
                         
@@ -169,7 +236,22 @@ class Harness:
             print("Interrupted")
             
         self.client.loop_stop()
-        self.save_report("watch_recovery", None, fetch_health())
+        self.client.disconnect()
+        
+        # TASK 6: Require actual transitions
+        if phase != "wait_recovery" or online_restoration_time is None:
+            result_str = "WAITING_FOR_PHYSICAL_TEST"
+            print("\nResult: WAITING_FOR_PHYSICAL_TEST (No physical transition observed)")
+        else:
+            result_str = "PHYSICAL_PASS"
+            print("\nResult: PHYSICAL_PASS")
+            print(f" - Last heartbeat before loss: {last_heartbeat_before_loss}")
+            print(f" - Offline detection timestamp: {offline_detection_time}")
+            print(f" - First heartbeat after recovery: {first_heartbeat_after_recovery}")
+            print(f" - Online restoration timestamp: {online_restoration_time}")
+            print(f" - Recovery duration: {self.state['recovery_time']:.2f}s")
+            
+        self.save_report("watch_recovery", None, fetch_health(), result_str)
 
     def run_broker_restart(self):
         print("=== BROKER RESTART ===")
@@ -190,9 +272,10 @@ class Harness:
             pass
             
         self.client.loop_stop()
-        self.save_report("broker_restart", None, fetch_health())
+        self.client.disconnect()
+        self.save_report("broker_restart", None, fetch_health(), "CODE_READY")
 
-    def save_report(self, test_name, esp_data, health_data):
+    def save_report(self, test_name, esp_data, health_data, result_str="OK"):
         os.makedirs(REPORT_DIR, exist_ok=True)
         filename = f"phase7-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
         path = os.path.join(REPORT_DIR, filename)
@@ -208,7 +291,7 @@ class Harness:
             "started_at": self.started_at,
             "finished_at": utc_now_iso(),
             "mode": self.mode,
-            "result": "OK",
+            "result": result_str,
             "observations": {
                 "events_count": len(self.events),
                 "heartbeats_received": self.state["heartbeats"],
