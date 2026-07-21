@@ -289,7 +289,26 @@ class CommandService:
             self._device["source"] = source
             command = self._commands.get(command_id)
             if not command:
-                self.store.put_device(self._device)
+                if command_id == "boot":
+                    stale_desired = self._device.get("desired_state")
+                    stale_on = stale_desired.get("test_led", {}).get("on") if stale_desired else None
+                    if stale_on is not None and stale_on != reported["on"]:
+                        old_desired = deepcopy(stale_desired)
+                        self._device["desired_state"] = {"test_led": deepcopy(reported)}
+                        self._device["current_command_id"] = None
+                        self.store.put_device(self._device)
+                        self.hub.emit("device_boot_safe_state_reconciliation", {
+                            "node_id": NODE_ID,
+                            "capability": "test_led",
+                            "old_desired": old_desired,
+                            "reported": reported,
+                            "reason": "device_boot_safe_state_reconciliation",
+                            "timestamp": utc_now()
+                        }, source)
+                    else:
+                        self.store.put_device(self._device)
+                else:
+                    self.store.put_device(self._device)
                 self.hub.emit("reported_state", {"node_id": NODE_ID, "target": "test_led", "state": reported}, source)
                 return False
             if (command["source"] == "simulated") != (source == "simulated"):

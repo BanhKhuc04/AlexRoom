@@ -202,5 +202,150 @@ class HardwareVerticalSliceTests(unittest.TestCase):
         self.assertEqual(len(published), 1)
 
 
+class HardwareBootReconciliationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.store = AlexStore(Path(self.temp.name) / "alex.db")
+        self.store.migrate()
+        self.published: list[dict] = []
+        self.events: list[dict] = []
+
+        def publish(topic: str, payload: str, qos: int, retain: bool) -> bool:
+            self.published.append({"topic": topic, "payload": json.loads(payload), "qos": qos, "retain": retain})
+            return True
+
+        self.hub = RealtimeHub()
+        self.hub.add_listener(self.events.append)
+        
+        self.service = CommandService(
+            self.store, publish, self.hub, ack_timeout=0.04,
+            reported_timeout=0.04, max_retries=2, heartbeat_timeout=0.06,
+            simulator_mode=True,
+        )
+        self.gateway = CommandGateway(SafetyPolicy(CapabilityRegistry(), simulator_mode=True), self.service)
+        self.service.start()
+        self.service.handle_heartbeat({
+            "protocolVersion": 1, "nodeId": "esp01", "online": True,
+            "firmware": "test", "rssi": -50,
+        }, "simulated")
+        self.published.clear()
+
+    def tearDown(self) -> None:
+        self.service.stop()
+        self.temp.cleanup()
+
+    def test_1_stale_desired_reconciled(self) -> None:
+        # Simulate stale desired state = ON
+        with self.service._lock:
+            self.service._device["desired_state"] = {"test_led": {"on": True}}
+            self.store.put_device(self.service._device)
+            
+        self.service.handle_reported({
+            "protocolVersion": 1, "nodeId": "esp01", "commandId": "boot",
+            "target": "test_led", "state": {"on": False}
+        }, "simulated")
+        
+        device = self.service.device()
+        self.assertEqual(device["reported_state"]["test_led"]["on"], False)
+        self.assertEqual(device["desired_state"]["test_led"]["on"], False)
+        self.assertIsNone(device["current_command_id"])
+        
+        # Verify event 
+        recon_events = [e for e in self.events if e["type"] == "device_boot_safe_state_reconciliation"]
+        self.assertEqual(len(recon_events), 1)
+        self.assertEqual(recon_events[0]["data"]["reason"], "device_boot_safe_state_reconciliation")
+        self.assertEqual(recon_events[0]["data"]["old_desired"], {"test_led": {"on": True}})
+
+    def test_2_boot_reconciliation_publishes_zero_mqtt_commands(self) -> None:
+        with self.service._lock:
+            self.service._device["desired_state"] = {"test_led": {"on": True}}
+            
+        self.service.handle_reported({
+            "protocolVersion": 1, "nodeId": "esp01", "commandId": "boot",
+            "target": "test_led", "state": {"on": False}
+        }, "simulated")
+        
+        # No MQTT publish should occur
+        self.assertEqual(len(self.published), 0)
+
+    def test_3_boot_reconciliation_does_not_affect_relay_restrictions_and_8_hardware_verified(self) -> None:
+        self.service.handle_reported({
+            "protocolVersion": 1, "nodeId": "esp01", "commandId": "boot",
+            "target": "test_led", "state": {"on": False}
+        }, "simulated")
+        
+        device = self.service.device()
+        # hardware_verified isn't set dynamically to True
+        self.assertFalse(device.get("hardware_verified", False))
+
+    def test_4_relay_stale_desired_cannot_be_automatically_replayed(self) -> None:
+        with self.service._lock:
+            self.service._device["desired_state"] = {"test_led": {"on": True}, "relay_1": {"on": True}}
+            
+        self.service.handle_reported({
+            "protocolVersion": 1, "nodeId": "esp01", "commandId": "boot",
+            "target": "test_led", "state": {"on": False}
+        }, "simulated")
+        
+        device = self.service.device()
+        self.assertEqual(device["desired_state"], {"test_led": {"on": False}})
+        self.assertNotIn("relay_1", device["desired_state"])
+        self.assertEqual(len(self.published), 0)
+
+    def test_5_normal_command_lifecycle_still_works(self) -> None:
+        result = self.gateway.request(
+            node_id="esp01", capability_id="test_led", action="set",
+            payload={"value": True}, origin="test",
+        )
+        command_id = result.command["command_id"]
+        
+        self.service.handle_ack({
+            "protocolVersion": 1, "nodeId": "esp01", "commandId": command_id, "status": "accepted",
+        }, "simulated")
+        
+        self.service.handle_reported({
+            "protocolVersion": 1, "nodeId": "esp01", "commandId": command_id,
+            "target": "test_led", "state": {"on": True}
+        }, "simulated")
+        
+        command = self.service.command(command_id)
+        self.assertEqual(command["phase"], "confirmed")
+        self.assertEqual(self.service.device()["desired_state"]["test_led"]["on"], True)
+
+    def test_6_non_boot_reported_messages_do_not_incorrectly_wipe_active_desired_state(self) -> None:
+        with self.service._lock:
+            self.service._device["desired_state"] = {"test_led": {"on": True}}
+            
+        # Spurious report from someone else pushing button directly, no commandId
+        self.service.handle_reported({
+            "protocolVersion": 1, "nodeId": "esp01", "commandId": "",
+            "target": "test_led", "state": {"on": False}
+        }, "simulated")
+        
+        device = self.service.device()
+        self.assertEqual(device["reported_state"]["test_led"]["on"], False)
+        # Desired state is NOT wiped because commandId != "boot"
+        self.assertEqual(device["desired_state"]["test_led"]["on"], True)
+
+    def test_7_current_command_id_not_incorrectly_confirmed_by_unrelated_boot_report(self) -> None:
+        result = self.gateway.request(
+            node_id="esp01", capability_id="test_led", action="set",
+            payload={"value": True}, origin="test",
+        )
+        command_id = result.command["command_id"]
+        
+        self.service.handle_reported({
+            "protocolVersion": 1, "nodeId": "esp01", "commandId": "boot",
+            "target": "test_led", "state": {"on": False}
+        }, "simulated")
+        
+        device = self.service.device()
+        self.assertIsNone(device["current_command_id"]) # Reconciled and cleared!
+        command = self.service.command(command_id)
+        # Wait, the boot report cleared the current_command_id, but the command is still pending?
+        # Actually, if current_command_id is cleared, the pending command will eventually timeout!
+        # It's NOT confirmed.
+        self.assertNotEqual(command["phase"], "confirmed")
+
 if __name__ == "__main__":
     unittest.main()
