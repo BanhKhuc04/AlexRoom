@@ -57,6 +57,7 @@ BRAIN_PORT = int(os.getenv("ALEX_BRAIN_PORT", "22"))
 DEVICE_ID = "esp01"
 TOPIC_PREFIX = f"alex/device/{DEVICE_ID}"
 ALEX_OTA_BASE_URL = os.getenv("ALEX_OTA_BASE_URL", "http://127.0.0.1:8000")
+ALEX_OTA_TOKEN_TTL_SECONDS = int(os.getenv("ALEX_OTA_TOKEN_TTL_SECONDS", "300"))
 
 if not MQTT_PASSWORD:
     raise RuntimeError("Thiếu biến môi trường MQTT_PASSWORD")
@@ -266,6 +267,7 @@ ota_service = AlexOtaService(
     publisher=_publish_v1_command,
     firmware_dir=ALEX_FIRMWARE_DIR,
     base_url=ALEX_OTA_BASE_URL,
+    token_ttl_seconds=ALEX_OTA_TOKEN_TTL_SECONDS,
 )
 
 

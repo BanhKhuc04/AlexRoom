@@ -1,6 +1,7 @@
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -9,11 +10,12 @@ from alex_store import AlexStore, utc_now
 logger = logging.getLogger(__name__)
 
 class AlexOtaService:
-    def __init__(self, store: AlexStore, publisher: Callable, firmware_dir: Path, base_url: str):
+    def __init__(self, store: AlexStore, publisher: Callable, firmware_dir: Path, base_url: str, token_ttl_seconds: int = 300):
         self.store = store
         self.publisher = publisher
         self.firmware_dir = firmware_dir
         self.base_url = base_url.rstrip("/")
+        self.token_ttl_seconds = token_ttl_seconds
 
     def get_manifest(self, node_id: str) -> dict[str, Any]:
         manifest_path = self.firmware_dir / node_id / "manifest.json"
@@ -152,4 +154,20 @@ class AlexOtaService:
             return False
         if record.get("node_id") != node_id or record.get("version") != version:
             return False
+        
+        created_at_str = record.get("created_at")
+        if not created_at_str:
+            return False
+            
+        try:
+            created_at = datetime.fromisoformat(created_at_str)
+        except ValueError:
+            return False
+            
+        now = datetime.now(timezone.utc)
+        elapsed = (now - created_at).total_seconds()
+        
+        if elapsed < 0 or elapsed > self.token_ttl_seconds:
+            return False
+            
         return True
