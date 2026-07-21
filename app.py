@@ -25,19 +25,21 @@ from pydantic import BaseModel, Field
 
 from alex_store import AlexStore, utc_now
 from alex_hardware import (
-    ACK_TOPIC, COMMAND_TOPIC, HEARTBEAT_TOPIC, REPORTED_TOPIC, STATUS_TOPIC, TELEMETRY_TOPIC,
+    ACK_TOPIC, COMMAND_TOPIC, HEARTBEAT_TOPIC, REPORTED_TOPIC, STATUS_TOPIC, TELEMETRY_TOPIC, OTA_STATUS_TOPIC,
     CommandService, RealtimeHub,
 )
 from alex_simulator import Esp01Simulator
 from alex_orchestration import AutomationExecutor, AutomationScheduler, MissionExecutor
 from alex_brain import BrainService
 from alex_safety import CapabilityRegistry, CommandGateway, GatewayResult, SafetyDecision, SafetyPolicy
+from alex_ota import AlexOtaService
 
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 CONFIG_PATH = BASE_DIR / "config.json"
 DATABASE_PATH = Path(os.getenv("ALEX_DATABASE_PATH", str(BASE_DIR / "data" / "alex.db")))
+ALEX_FIRMWARE_DIR = Path(os.getenv("ALEX_FIRMWARE_DIR", str(BASE_DIR / "data" / "firmware")))
 
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
@@ -54,6 +56,7 @@ BRAIN_PORT = int(os.getenv("ALEX_BRAIN_PORT", "22"))
 
 DEVICE_ID = "esp01"
 TOPIC_PREFIX = f"alex/device/{DEVICE_ID}"
+ALEX_OTA_BASE_URL = os.getenv("ALEX_OTA_BASE_URL", "http://127.0.0.1:8000")
 
 if not MQTT_PASSWORD:
     raise RuntimeError("Thiếu biến môi trường MQTT_PASSWORD")
@@ -132,6 +135,9 @@ class V1CommandRequest(BaseModel):
 
 class DomainRecordRequest(BaseModel):
     body: dict[str, Any]
+
+class OtaRequest(BaseModel):
+    version: str
 
 
 def utc_now_iso() -> str:
@@ -255,6 +261,12 @@ mission_executor = MissionExecutor(store, command_gateway)
 automation_executor = AutomationExecutor(store, mission_executor, command_gateway)
 automation_scheduler = AutomationScheduler(store, automation_executor, realtime_hub)
 brain_service = BrainService(store, realtime_hub, BRAIN_MAC, BRAIN_HOST, BRAIN_PORT)
+ota_service = AlexOtaService(
+    store=store,
+    publisher=_publish_v1_command,
+    firmware_dir=ALEX_FIRMWARE_DIR,
+    base_url=ALEX_OTA_BASE_URL,
+)
 
 
 def _with_command_verification(command: dict[str, Any]) -> dict[str, Any]:
@@ -300,6 +312,7 @@ def on_connect(
         client.subscribe(HEARTBEAT_TOPIC, qos=1)
         client.subscribe(TELEMETRY_TOPIC, qos=0)
         client.subscribe(STATUS_TOPIC, qos=1)
+        client.subscribe(OTA_STATUS_TOPIC, qos=1)
         add_event("mqtt", "Alex Core đã kết nối MQTT", "success")
         print("MQTT connected")
     else:
@@ -348,6 +361,8 @@ def on_message(
             command_service.handle_heartbeat(document, message_source)
         elif topic == STATUS_TOPIC and document.get("online") is False:
             command_service.mark_offline()
+        elif topic == OTA_STATUS_TOPIC:
+            ota_service.handle_ota_status(DEVICE_ID, document)
         else:
             realtime_hub.emit("telemetry", document, message_source)
         return
@@ -401,6 +416,15 @@ async def lifespan(app: FastAPI):
     add_event("system", "Alex Core khởi động", "success")
     mqtt_client.connect_async(MQTT_HOST, MQTT_PORT, keepalive=30)
     mqtt_client.loop_start()
+    
+    def _on_hub_heartbeat(event: dict[str, Any], source: str) -> None:
+        if source == "simulated" and not ALEX_SIMULATOR:
+            return
+        ota_service.evaluate_ota_completion(event)
+        
+    realtime_hub.on("heartbeat", _on_hub_heartbeat)
+    realtime_hub.on("node_online", _on_hub_heartbeat)
+    
     command_service.start()
     automation_scheduler.start()
     if ALEX_SIMULATOR:
@@ -600,6 +624,64 @@ def system_metrics() -> dict[str, Any]:
 def get_events() -> dict[str, Any]:
     with event_lock:
         return {"items": list(events)}
+
+
+@app.delete("/api/v1/records/{domain}/{record_id}")
+def delete_domain_record(
+    domain: str,
+    record_id: str,
+    _: None = Depends(require_mutation_budget),
+) -> dict[str, bool]:
+    # Placeholder for future implementation
+    raise HTTPException(status_code=501, detail="Chưa hỗ trợ xóa record")
+
+
+@app.get("/api/v1/ota/firmware/{node_id}/{version}")
+def get_firmware(node_id: str, version: str, token: str):
+    if not ota_service.validate_download_token(node_id, version, token):
+        raise HTTPException(status_code=403, detail="Invalid or expired download token")
+    
+    firmware_path = ALEX_FIRMWARE_DIR / node_id / version / "firmware.bin"
+    try:
+        if not firmware_path.resolve().is_relative_to(ALEX_FIRMWARE_DIR.resolve()):
+            raise HTTPException(status_code=403, detail="Invalid path")
+    except AttributeError:
+        pass
+        
+    if not firmware_path.exists() or not firmware_path.is_file():
+        raise HTTPException(status_code=404, detail="Firmware binary not found")
+        
+    return FileResponse(
+        firmware_path, 
+        media_type="application/octet-stream",
+        filename=f"{node_id}-{version}.bin"
+    )
+
+
+@app.get("/api/v1/ota/{node_id}")
+def get_ota_info(node_id: str, _: None = Depends(require_api_key)) -> dict[str, Any]:
+    v1 = command_service.device()
+    if node_id != v1.get("node_id", DEVICE_ID):
+        raise HTTPException(status_code=404, detail="Node not found")
+        
+    installed_version = v1.get("firmware")
+    return ota_service.get_ota_info(node_id, installed_version)
+
+
+@app.post("/api/v1/ota/{node_id}")
+def request_ota(node_id: str, payload: OtaRequest, _: None = Depends(require_api_key)) -> dict[str, Any]:
+    v1 = command_service.device()
+    if node_id != v1.get("node_id", DEVICE_ID):
+        raise HTTPException(status_code=404, detail="Node not found")
+        
+    if v1.get("connection") != "online":
+        raise HTTPException(status_code=400, detail="Thiết bị đang offline")
+        
+    installed_version = v1.get("firmware")
+    try:
+        return ota_service.request_ota(node_id, payload.version, installed_version)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.post("/api/devices/esp01/relays/{relay_id}/{action}")

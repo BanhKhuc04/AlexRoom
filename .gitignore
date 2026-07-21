@@ -27,3 +27,8 @@ CODEX_*.txt
 
 # Local/generated reports
 report/
+
+firmware/esp01/include/config.h
+
+# Local PlatformIO Python environment
+firmware/esp01/.pio-venv/
