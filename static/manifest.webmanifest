@@ -1,0 +1,20 @@
+{
+  "name": "ALEX NEXUS OS",
+  "short_name": "ALEX",
+  "description": "Trợ lý và hệ điều hành phòng thông minh local-first.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#03070a",
+  "theme_color": "#03070a",
+  "lang": "vi",
+  "icons": [
+    {
+      "src": "/static/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

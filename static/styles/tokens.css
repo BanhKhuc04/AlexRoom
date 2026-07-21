@@ -1,0 +1,44 @@
+:root {
+  color-scheme: dark;
+  --alex-bg-0: #03070a;
+  --alex-bg-1: #061018;
+  --alex-bg-2: #0a1822;
+  --alex-surface-0: rgba(8, 19, 27, 0.72);
+  --alex-surface-1: rgba(10, 26, 36, 0.86);
+  --alex-surface-2: rgba(16, 39, 50, 0.76);
+  --alex-cyan: #39ddff;
+  --alex-cyan-soft: #8beeff;
+  --alex-cyan-deep: #0b8fac;
+  --alex-emerald: #4ee3a2;
+  --alex-amber: #ffbd59;
+  --alex-critical: #ff654f;
+  --alex-text-primary: #eafaff;
+  --alex-text-secondary: #8da8b3;
+  --alex-text-tertiary: #506b76;
+  --alex-line: rgba(85, 210, 240, 0.16);
+  --alex-line-strong: rgba(85, 210, 240, 0.42);
+  --alex-line-faint: rgba(85, 210, 240, 0.075);
+  --alex-radius-xs: 6px;
+  --alex-radius-sm: 10px;
+  --alex-radius-md: 16px;
+  --alex-radius-lg: 24px;
+  --alex-shadow-core: 0 0 80px rgba(57, 221, 255, 0.16);
+  --alex-shadow-panel: 0 28px 80px rgba(0, 0, 0, 0.32);
+  --alex-duration-fast: 140ms;
+  --alex-duration-normal: 280ms;
+  --alex-duration-cinematic: 700ms;
+  --alex-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --alex-font-display: "Bahnschrift", "Aptos Display", "Segoe UI", sans-serif;
+  --alex-font-body: "Segoe UI Variable", "Aptos", "Segoe UI", sans-serif;
+  --alex-font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  --shell-gutter: clamp(18px, 3.2vw, 56px);
+}
+
+body[data-alex-state="success"] { --state-color: var(--alex-emerald); --state-rgb: 78, 227, 162; }
+body[data-alex-state="warning"] { --state-color: var(--alex-amber); --state-rgb: 255, 189, 89; }
+body[data-alex-state="critical"] { --state-color: var(--alex-critical); --state-rgb: 255, 101, 79; }
+body[data-alex-state="offline"] { --state-color: #66808b; --state-rgb: 102, 128, 139; }
+body:not([data-alex-state="success"]):not([data-alex-state="warning"]):not([data-alex-state="critical"]):not([data-alex-state="offline"]) {
+  --state-color: var(--alex-cyan);
+  --state-rgb: 57, 221, 255;
+}

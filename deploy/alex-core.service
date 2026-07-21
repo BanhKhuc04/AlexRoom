@@ -1,0 +1,21 @@
+[Unit]
+Description=ALEX NEXUS OS local control plane
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=alex
+Group=alex
+WorkingDirectory=/opt/alexroom
+EnvironmentFile=/etc/alexroom/alex.env
+ExecStart=/opt/alexroom/.venv/bin/python -m uvicorn app:app --host 0.0.0.0 --port 5173
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/alexroom/data /opt/alexroom/backups /opt/alexroom/config.json
+
+[Install]
+WantedBy=multi-user.target
