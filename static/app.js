@@ -155,6 +155,7 @@ function renderActiveWorkspace() {
     onRelay: (id, action) => { void executeRelayCommand(id, action); },
     onTestLed: (value) => { void executeTestLedCommand(value); },
     onMode: (mode) => { void executeModeCommand(mode); },
+    onOta: (version) => { void executeOtaCommand(version); },
     onSettings: openExperienceDialog,
   });
 }
@@ -436,6 +437,33 @@ async function executeTestLedCommand(value) {
   scheduleIdle();
 }
 
+/** @param {string} targetVersion */
+async function executeOtaCommand(targetVersion) {
+  if (!api.apiKey) {
+    showToast("Cần xác minh API key trước khi cập nhật firmware.");
+    openAuthDialog();
+    return;
+  }
+  const confirmMsg = `ESP01 sẽ được cập nhật lên firmware ${targetVersion}. Bạn có chắc chắn muốn tiến hành?`;
+  if (!window.confirm(confirmMsg)) return;
+
+  if (!prepareCommandVisualState()) return;
+  try {
+    await api.requestOta("esp01", targetVersion);
+    setAlexState("acting");
+    presenceView.showMicroResponse(`Đã gửi yêu cầu cập nhật firmware ESP01 lên ${targetVersion}.`);
+    showToast(`OTA Request ${targetVersion} sent`, "success");
+    void refreshSnapshot();
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "Không thể gửi lệnh OTA";
+    setAlexState("warning");
+    presenceView.showMicroResponse(`Lỗi cập nhật OTA: ${reason}`);
+    showToast(reason, "error");
+  }
+  renderActiveWorkspace();
+  scheduleIdle();
+}
+
 /** @param {RoomMode} mode */
 async function executeModeCommand(mode) {
   if (!api.apiKey) {
@@ -556,8 +584,11 @@ function bindEvents() {
 
 function startPolling() {
   if (pollTimer !== null) return;
-  // SSE drives live updates; this slow poll only repairs missed events/reconnect gaps.
-  pollTimer = window.setInterval(() => { void refreshSnapshot(); }, 30000);
+  // Dynamic polling based on OTA state
+  const otaState = snapshot?.otaInfo?.state?.status ?? "idle";
+  const isOtaActive = ["requested", "downloading", "installing", "rebooting"].includes(otaState);
+  const interval = isOtaActive ? 2500 : 30000;
+  pollTimer = window.setInterval(() => { void refreshSnapshot(); }, interval);
 }
 
 function stopPolling() {

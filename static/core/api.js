@@ -73,7 +73,7 @@ export class AlexApi {
 
   /** @returns {Promise<SystemSnapshot>} */
   async getSnapshot() {
-    const [health, config, device, system, eventPayload, v1Devices, v1Commands] = await Promise.all([
+    const [health, config, device, system, eventPayload, v1Devices, v1Commands, otaPayload] = await Promise.all([
       this.request("/health"),
       this.request("/api/config"),
       this.request("/api/devices/esp01"),
@@ -81,6 +81,7 @@ export class AlexApi {
       this.request("/api/events"),
       this.request("/api/v1/devices"),
       this.request("/api/v1/commands?limit=1"),
+      this.request("/api/v1/ota/esp01").catch(() => null),
     ]);
 
     return {
@@ -91,6 +92,7 @@ export class AlexApi {
       events: /** @type {{items: EventItem[]}} */ (eventPayload).items ?? [],
       v1Device: /** @type {{items: import("./domain").V1Device[]}} */ (v1Devices).items?.find((item) => item.node_id === "esp01") ?? null,
       currentCommand: /** @type {{items: import("./domain").V1Command[]}} */ (v1Commands).items?.[0] ?? null,
+      otaInfo: /** @type {import("./domain").OtaInfo | null} */ (otaPayload),
       receivedAt: new Date().toISOString(),
     };
   }
@@ -125,5 +127,17 @@ export class AlexApi {
   /** @param {string} commandId */
   async getCommand(commandId) {
     return /** @type {Promise<import("./domain").V1Command>} */ (this.request(`/api/v1/commands/${encodeURIComponent(commandId)}`));
+  }
+
+  /**
+   * @param {string} nodeId
+   * @param {string} targetVersion
+   */
+  async requestOta(nodeId, targetVersion) {
+    return await this.request(`/api/v1/ota/${encodeURIComponent(nodeId)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version: targetVersion }),
+    });
   }
 }

@@ -121,12 +121,33 @@ function renderDevices(snapshot) {
     </article>`;
   });
 
-  return `<article class="workspace-panel"><h2>ESP01 · Digital twin</h2><p>Chỉ <b>test_led</b> điện áp thấp được mở. Thành công chỉ xuất hiện sau ACK và reported state khớp.</p>
+  const devicesPanel = `<article class="workspace-panel"><h2>ESP01 · Digital twin</h2><p>Chỉ <b>test_led</b> điện áp thấp được mở. Thành công chỉ xuất hiện sau ACK và reported state khớp.</p>
     <div class="device-twin-grid">
       <article class="relay-card test-led-card"><header><div><span>SAFE TARGET / ${escapeHtml(twin?.source ?? "NO SOURCE")}</span><h3>Test LED</h3><p>${formatVerification(ledCapability?.verification_status)} · ${ledCapability?.command_allowed ? "AVAILABLE" : "UNAVAILABLE"}</p></div><b class="relay-state ${reportedOn ? "on" : ""}">${reportedOn ? "ON" : "OFF"}</b></header>
       <dl class="integration-list"><div><dt>CONNECTION</dt><dd>${escapeHtml(twin?.connection ?? "UNKNOWN")}</dd></div><div><dt>VERIFICATION</dt><dd>${formatVerification(ledCapability?.verification_status)}</dd></div><div><dt>COMMAND</dt><dd>${ledCapability?.command_allowed ? "AVAILABLE" : "LOCKED"}</dd></div><div><dt>DESIRED</dt><dd>${desiredOn == null ? "—" : desiredOn ? "ON" : "OFF"}</dd></div><div><dt>REPORTED</dt><dd>${reportedOn ? "ON" : "OFF"}</dd></div><div><dt>FIRMWARE</dt><dd>${escapeHtml(twin?.firmware ?? "—")}</dd></div><div><dt>RSSI</dt><dd>${twin?.rssi == null ? "—" : `${twin.rssi} dBm`}</dd></div><div><dt>LAST SEEN</dt><dd>${formatTime(twin?.last_seen_at ?? null)}</dd></div><div><dt>PHASE</dt><dd>${escapeHtml(command?.phase ?? "IDLE")}</dd></div><div><dt>RETRY</dt><dd>${command?.retry_count ?? 0}</dd></div></dl>
       <div class="relay-actions"><button type="button" data-test-led="true" ${online && ledCapability?.command_allowed ? "" : "disabled"}>BẬT LED</button><button type="button" data-test-led="false" ${online && ledCapability?.command_allowed ? "" : "disabled"}>TẮT LED</button></div></article>
     </div><div class="phase-notice"><b>SAFETY</b><span>Bốn relay cũ bị khóa vì chưa có mapping tải và interlock đã xác minh. Không nối 220V, UV, khóa cửa, motor hoặc pump.</span></div><div class="relay-grid legacy-relays">${cards.join("")}</div></article>`;
+  
+  const ota = snapshot?.otaInfo;
+  const otaState = ota?.state?.status ?? "idle";
+  const otaTarget = ota?.state?.target_version ?? "none";
+  const updateAvailable = ota?.update_available ? "Yes" : "No";
+  const availableVer = ota?.available_version ?? "—";
+  const releaseInfo = availableVer && ota?.releases?.[availableVer] 
+    ? `${(ota.releases[availableVer].size / 1024).toFixed(1)} KB · SHA256: ${ota.releases[availableVer].sha256.substring(0, 8)}...`
+    : "—";
+  
+  const isOtaActive = ["requested", "downloading", "installing", "rebooting"].includes(otaState);
+  const canUpdate = online && ota?.update_available && !isOtaActive;
+
+  const otaPanel = `<article class="workspace-panel"><h2>ESP01 · Firmware / OTA</h2><p>Quản lý firmware từ xa. Yêu cầu thiết bị online và không có lệnh đang thực thi.</p>
+    <div class="device-twin-grid">
+      <article class="relay-card test-led-card"><header><div><span>OTA TARGET / ${escapeHtml(otaTarget)}</span><h3>Cập nhật Firmware</h3><p>${isOtaActive ? "IN PROGRESS" : (ota?.update_available ? "UPDATE AVAILABLE" : "UP TO DATE")}</p></div><b class="relay-state ${isOtaActive ? "on" : ""}">${escapeHtml(otaState.toUpperCase())}</b></header>
+      <dl class="integration-list"><div><dt>INSTALLED</dt><dd>${escapeHtml(ota?.installed_version ?? "—")}</dd></div><div><dt>AVAILABLE</dt><dd>${escapeHtml(availableVer)}</dd></div><div><dt>UPDATE AVAILABLE</dt><dd>${updateAvailable}</dd></div><div><dt>FIRMWARE INFO</dt><dd>${escapeHtml(releaseInfo)}</dd></div><div><dt>OTA STATE</dt><dd>${escapeHtml(otaState.toUpperCase())}</dd></div></dl>
+      <div class="relay-actions"><button type="button" data-ota-target="${escapeHtml(availableVer)}" ${canUpdate ? "" : "disabled"}>CẬP NHẬT FIRMWARE</button></div></article>
+    </div></article>`;
+
+  return devicesPanel + otaPanel;
 }
 
 /** @param {SystemSnapshot | null} snapshot */
@@ -171,7 +192,7 @@ function renderScenes(snapshot) {
  * @param {HTMLElement} container
  * @param {string} workspace
  * @param {SystemSnapshot | null} snapshot
- * @param {{onRelay: (id: number, action: "ON" | "OFF") => void, onTestLed: (value: boolean) => void, onMode: (mode: import("../core/domain").RoomMode) => void, onSettings: () => void}} actions
+ * @param {{onRelay: (id: number, action: "ON" | "OFF") => void, onTestLed: (value: boolean) => void, onMode: (mode: import("../core/domain").RoomMode) => void, onSettings: () => void, onOta?: (version: string) => void}} actions
  */
 export function renderWorkspace(container, workspace, snapshot, actions) {
   if (workspace === "overview") container.innerHTML = renderOverview(snapshot);
@@ -199,6 +220,12 @@ export function renderWorkspace(container, workspace, snapshot, actions) {
     element.addEventListener("click", () => {
       const mode = element.dataset.roomMode;
       if (mode === "home" || mode === "study" || mode === "sleep" || mode === "away") actions.onMode(mode);
+    });
+  });
+  container.querySelectorAll("[data-ota-target]").forEach((element) => {
+    if (!(element instanceof HTMLButtonElement)) return;
+    element.addEventListener("click", () => {
+      if (actions.onOta) actions.onOta(element.dataset.otaTarget ?? "");
     });
   });
   container.querySelector("[data-open-experience]")?.addEventListener("click", actions.onSettings);

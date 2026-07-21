@@ -67,6 +67,24 @@ export interface EventItem {
   details: Record<string, unknown> | null;
 }
 
+export interface OtaState {
+  operation_id: string;
+  target_version: string;
+  status: string;
+  requested_at: string;
+  status_updated_at?: string;
+  confirmed_at?: string;
+  reason?: string;
+}
+
+export interface OtaInfo {
+  installed_version: string | null;
+  available_version: string | null;
+  update_available: boolean;
+  releases: Record<string, { size: number; sha256: string; created_at: string }>;
+  state: OtaState | null;
+}
+
 export interface SystemSnapshot {
   health: HealthPayload;
   config: ConfigPayload;
@@ -75,6 +93,7 @@ export interface SystemSnapshot {
   events: EventItem[];
   v1Device: V1Device | null;
   currentCommand: V1Command | null;
+  otaInfo: OtaInfo | null;
   receivedAt: string;
 }
 
