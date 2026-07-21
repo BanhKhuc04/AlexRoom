@@ -7,7 +7,7 @@
 
 namespace {
 constexpr char NODE_ID[] = "esp01";
-constexpr char FIRMWARE_VERSION[] = "1.0.1";
+constexpr char FIRMWARE_VERSION[] = "1.0.2";
 constexpr uint8_t PROTOCOL_VERSION = 1;
 constexpr uint8_t TEST_LED_PIN = LED_BUILTIN;
 constexpr bool LED_ACTIVE_LOW = true;
