@@ -2,20 +2,45 @@
 Description=ALEX NEXUS OS local control plane
 After=network-online.target mosquitto.service
 Wants=network-online.target
+# Prevent systemd from looping on repeated crashes (max 5 restarts in 60 s).
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
-User=alex
-Group=alex
-WorkingDirectory=/opt/alexroom
-EnvironmentFile=/etc/alexroom/alex.env
-ExecStart=/opt/alexroom/.venv/bin/python -m uvicorn app:app --host 0.0.0.0 --port 5173
+User=vanhkhuc
+Group=vanhkhuc
+WorkingDirectory=/opt/alex/AlexRoom-0.2.0-hardware-rc
+EnvironmentFile=/etc/alex/alex.env
+
+# Use the project-local venv binary; plain uvicorn (no [standard]) avoids
+# uvloop/httptools C compilation that causes OOM on ARMv7 Orange Pi One.
+ExecStart=/opt/alex/AlexRoom-0.2.0-hardware-rc/.venv/bin/uvicorn \
+    app:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --workers 1
+
 Restart=on-failure
 RestartSec=5
+
+# Security hardening — ProtectSystem=strict makes the full filesystem
+# read-only except for the paths explicitly listed in ReadWritePaths.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/opt/alexroom/data /opt/alexroom/backups /opt/alexroom/config.json
+
+# Exact write surfaces required at runtime:
+#   /var/lib/alex             — SQLite production database (ALEX_DATABASE_PATH)
+#   .../backups               — POST /api/v1/backup writes here via BASE_DIR
+#   .../config.json           — PUT /api/config writes via atomic tmp-replace
+# Create /var/lib/alex before first service start:
+#   sudo mkdir -p /var/lib/alex
+#   sudo chown vanhkhuc:vanhkhuc /var/lib/alex
+#   sudo chmod 750 /var/lib/alex
+ReadWritePaths=/var/lib/alex \
+    /opt/alex/AlexRoom-0.2.0-hardware-rc/backups \
+    /opt/alex/AlexRoom-0.2.0-hardware-rc/config.json
 
 [Install]
 WantedBy=multi-user.target

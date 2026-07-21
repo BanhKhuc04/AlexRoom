@@ -1,0 +1,19 @@
+# Orange Pi One (ARMv7 / Armbian) — production dependency profile.
+#
+# Do NOT use this file on Windows dev environments.
+# Use requirements.txt (which includes uvicorn[standard]) for local dev.
+#
+# Rationale for uvicorn without [standard]:
+#   uvicorn[standard] pulls uvloop and httptools, both of which require
+#   C compilation from source.  On Orange Pi One (~512 MB RAM) the
+#   compiler is OOM-killed mid-build.  Plain uvicorn uses Python's built-in
+#   asyncio event loop, which is fully supported and sufficient for this
+#   single-worker application.
+#
+# Install on Orange Pi:
+#   .venv/bin/pip install -r requirements-orangepi.txt
+
+fastapi>=0.115,<1.0
+uvicorn>=0.34,<1.0
+paho-mqtt>=2.1,<3.0
+pydantic>=2.10,<3.0

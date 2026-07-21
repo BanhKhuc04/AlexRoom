@@ -13,6 +13,11 @@ esphome/.venv/
 esphome/.esphome/
 esphome/secrets.yaml
 
+# Protect local environment files with secrets from accidental commit.
+.env
+.env.*
+!.env.example
+
 # Local release artifacts and historical project copies are not source-of-truth.
 dist-release/
 ALEX_NEXUS_UI_v0.4/
