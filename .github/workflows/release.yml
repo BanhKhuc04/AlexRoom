@@ -1,0 +1,438 @@
+name: ALEX Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semantic version without v prefix, for example 0.5.0"
+        required: true
+        type: string
+      mode:
+        description: "Validate only or publish the release"
+        required: true
+        default: validate
+        type: choice
+        options:
+          - validate
+          - publish
+      confirm:
+        description: "For publish mode, type RELEASE"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: alex-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Validate and publish ALEX release
+    runs-on: ubuntu-latest
+
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_MODE: ${{ inputs.mode }}
+      RELEASE_CONFIRM: ${{ inputs.confirm }}
+
+    steps:
+      - name: Checkout main with full history
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          package-manager-cache: false
+
+      - name: Validate release request
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "ERROR: Invalid semantic version: $RELEASE_VERSION"
+            exit 1
+          fi
+
+          if [[ "$RELEASE_MODE" != "validate" && "$RELEASE_MODE" != "publish" ]]; then
+            echo "ERROR: Invalid release mode: $RELEASE_MODE"
+            exit 1
+          fi
+
+          if [[ "$RELEASE_MODE" == "publish" && "$RELEASE_CONFIRM" != "RELEASE" ]]; then
+            echo "ERROR: Publish mode requires confirm=RELEASE"
+            exit 1
+          fi
+
+          git fetch origin main --tags
+
+          LOCAL_COMMIT="$(git rev-parse HEAD)"
+          REMOTE_COMMIT="$(git rev-parse origin/main)"
+
+          if [[ "$LOCAL_COMMIT" != "$REMOTE_COMMIT" ]]; then
+            echo "ERROR: Checked-out commit is not origin/main"
+            exit 1
+          fi
+
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          version = os.environ["RELEASE_VERSION"].strip()
+
+          canonical = Path("VERSION").read_text(
+              encoding="utf-8"
+          ).strip()
+
+          package = json.loads(
+              Path("package.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+
+          package_lock = json.loads(
+              Path("package-lock.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+
+          versions = {
+              "VERSION": canonical,
+              "package.json": package.get("version"),
+              "package-lock.json": package_lock.get("version"),
+              "package-lock root": (
+                  package_lock.get("packages", {})
+                  .get("", {})
+                  .get("version")
+              ),
+          }
+
+          invalid = {
+              name: value
+              for name, value in versions.items()
+              if value != version
+          }
+
+          if invalid:
+              details = ", ".join(
+                  f"{name}={value!r}"
+                  for name, value in invalid.items()
+              )
+
+              raise SystemExit(
+                  "ERROR: Release versions are not synchronized: "
+                  + details
+              )
+
+          expected_subject = f"chore(release): v{version}"
+
+          subject = subprocess.check_output(
+              ["git", "log", "-1", "--pretty=%s"],
+              text=True,
+              encoding="utf-8",
+          ).strip()
+
+          if subject != expected_subject:
+              raise SystemExit(
+                  "ERROR: HEAD is not the expected release commit. "
+                  f"Expected {expected_subject!r}, got {subject!r}"
+              )
+
+          print("Release request validated")
+          print(f"Version: {version}")
+          print(f"Commit: {subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], text=True).strip()}")
+          PY
+
+          python scripts/extract_release_notes.py \
+            "$RELEASE_VERSION" \
+            > /tmp/alex-release-notes-check.md
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Install Node.js dependencies
+        run: npm ci
+
+      - name: Run full quality gate
+        run: npm run check:all
+
+      - name: Build release package
+        shell: pwsh
+        run: |
+          ./scripts/release.ps1 -Version $env:RELEASE_VERSION
+
+      - name: Extract release notes
+        run: |
+          python scripts/extract_release_notes.py \
+            "$RELEASE_VERSION" \
+            --output dist-release/release-notes.md
+
+      - name: Validate release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import hashlib
+          import os
+          import zipfile
+          from pathlib import Path
+
+          version = os.environ["RELEASE_VERSION"]
+          root = f"AlexRoom-{version}"
+          release_dir = Path("dist-release")
+          archive = release_dir / f"{root}.zip"
+          notes_file = release_dir / "release-notes.md"
+          checksum_file = release_dir / f"{root}.zip.sha256"
+
+          if not archive.exists():
+              raise SystemExit(
+                  f"ERROR: Release archive is missing: {archive}"
+              )
+
+          required = {
+              f"{root}/VERSION",
+              f"{root}/CHANGELOG.md",
+              f"{root}/app.py",
+              f"{root}/alex_version.py",
+              f"{root}/package.json",
+              f"{root}/package-lock.json",
+              f"{root}/requirements.txt",
+              f"{root}/scripts/apply_release.py",
+              f"{root}/scripts/prepare_release.py",
+              f"{root}/scripts/next_version.py",
+              f"{root}/scripts/extract_release_notes.py",
+          }
+
+          forbidden_parts = {
+              ".pio",
+              ".pio-venv",
+              "__pycache__",
+          }
+
+          with zipfile.ZipFile(archive) as package:
+              names = {
+                  name.rstrip("/")
+                  for name in package.namelist()
+              }
+
+              missing = sorted(required - names)
+
+              if missing:
+                  raise SystemExit(
+                      "ERROR: Required release files are missing:\n"
+                      + "\n".join(missing)
+                  )
+
+              forbidden = []
+
+              for name in sorted(names):
+                  path = Path(name)
+                  parts = set(path.parts)
+
+                  if parts & forbidden_parts:
+                      forbidden.append(name)
+                      continue
+
+                  lowered = path.name.lower()
+
+                  if lowered == ".env":
+                      forbidden.append(name)
+                  elif lowered == "secrets.yaml":
+                      forbidden.append(name)
+                  elif lowered.endswith(".pyc"):
+                      forbidden.append(name)
+                  elif lowered.endswith(".db"):
+                      forbidden.append(name)
+                  elif lowered.endswith(".db-wal"):
+                      forbidden.append(name)
+                  elif lowered.endswith(".db-shm"):
+                      forbidden.append(name)
+
+              if forbidden:
+                  raise SystemExit(
+                      "ERROR: Forbidden release content found:\n"
+                      + "\n".join(forbidden)
+                  )
+
+              packaged_version = package.read(
+                  f"{root}/VERSION"
+              ).decode("utf-8").strip()
+
+              if packaged_version != version:
+                  raise SystemExit(
+                      "ERROR: Packaged VERSION mismatch: "
+                      f"{packaged_version!r}"
+                  )
+
+          digest = hashlib.sha256(
+              archive.read_bytes()
+          ).hexdigest().upper()
+
+          checksum_file.write_text(
+              f"{digest}  {archive.name}\n",
+              encoding="utf-8",
+              newline="\n",
+          )
+
+          notes = notes_file.read_text(
+              encoding="utf-8"
+          ).rstrip()
+
+          notes_file.write_text(
+              notes
+              + "\n\n## Download verification\n\n"
+              + f"File: `{archive.name}`\n\n"
+              + "SHA256:\n\n"
+              + f"`{digest}`\n",
+              encoding="utf-8",
+              newline="\n",
+          )
+
+          print("Release archive validation passed")
+          print(f"Archive: {archive}")
+          print(f"SHA256: {digest}")
+          PY
+
+      - name: Show validation result
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Mode: $RELEASE_MODE"
+          echo "Version: $RELEASE_VERSION"
+          echo "Commit: $(git rev-parse --short HEAD)"
+          ls -lh "dist-release/AlexRoom-$RELEASE_VERSION.zip"
+          cat "dist-release/AlexRoom-$RELEASE_VERSION.zip.sha256"
+
+      - name: Check publish state
+        if: inputs.mode == 'publish'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          TAG="v$RELEASE_VERSION"
+          HEAD_COMMIT="$(git rev-parse HEAD)"
+
+          if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+            TAG_COMMIT="$(git rev-parse "$TAG^{commit}")"
+
+            if [[ "$TAG_COMMIT" != "$HEAD_COMMIT" ]]; then
+              echo "ERROR: Existing tag points to another commit"
+              exit 1
+            fi
+
+            echo "Existing tag is valid: $TAG"
+          else
+            echo "Tag will be created: $TAG"
+          fi
+
+          RELEASE_STATE="$(
+            gh api \
+              --paginate \
+              "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq ".[] | select(.tag_name == \"$TAG\") | [.id, .draft] | @tsv" \
+              | head -n 1
+          )"
+
+          if [[ -n "$RELEASE_STATE" ]]; then
+            RELEASE_DRAFT="$(
+              printf '%s' "$RELEASE_STATE" |
+              cut -f 2
+            )"
+
+            if [[ "$RELEASE_DRAFT" != "true" ]]; then
+              echo "ERROR: Published release already exists: $TAG"
+              exit 1
+            fi
+
+            echo "Existing draft release will be completed"
+          fi
+
+      - name: Create annotated tag
+        if: inputs.mode == 'publish'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="v$RELEASE_VERSION"
+
+          if ! git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+            git tag -a "$TAG" -m "ALEX $TAG"
+            git push origin "$TAG"
+          fi
+
+      - name: Publish GitHub Release
+        if: inputs.mode == 'publish'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          TAG="v$RELEASE_VERSION"
+          ZIP="dist-release/AlexRoom-$RELEASE_VERSION.zip"
+          SHA="dist-release/AlexRoom-$RELEASE_VERSION.zip.sha256"
+          NOTES="dist-release/release-notes.md"
+
+          RELEASE_ID="$(
+            gh api \
+              --paginate \
+              "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq ".[] | select(.tag_name == \"$TAG\" and .draft == true) | .id" \
+              | head -n 1
+          )"
+
+          if [[ -z "$RELEASE_ID" ]]; then
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "ALEX v$RELEASE_VERSION" \
+              --notes-file "$NOTES" \
+              --draft
+
+            RELEASE_ID="$(
+              gh api \
+                --paginate \
+                "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+                --jq ".[] | select(.tag_name == \"$TAG\" and .draft == true) | .id" \
+                | head -n 1
+            )"
+          fi
+
+          gh release upload "$TAG" \
+            "$ZIP" \
+            "$SHA" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+
+          gh release edit "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "ALEX v$RELEASE_VERSION" \
+            --notes-file "$NOTES" \
+            --draft=false \
+            --latest
+
+          echo "ALEX v$RELEASE_VERSION published successfully"
