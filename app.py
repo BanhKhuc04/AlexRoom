@@ -33,7 +33,7 @@ from alex_orchestration import AutomationExecutor, AutomationScheduler, MissionE
 from alex_brain import BrainService
 from alex_safety import CapabilityRegistry, CommandGateway, GatewayResult, SafetyDecision, SafetyPolicy
 from alex_ota import AlexOtaService
-
+from alex_version import ALEX_VERSION
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -471,7 +471,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Alex Core API",
-    version="0.3.0",
+    version=ALEX_VERSION,
     lifespan=lifespan,
 )
 
@@ -503,8 +503,8 @@ def service_worker() -> FileResponse:
 def info() -> dict[str, str]:
     return {
         "name": "Alex Room",
-        "version": "0.3.0",
-        "status": "running",
+        "version": ALEX_VERSION,
+        "status": "running"
     }
 
 
