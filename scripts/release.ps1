@@ -85,7 +85,8 @@ $files = @(
   "eslint.config.js",
   ".env.example",
   "AGENTS.md",
-  "config.example.json"
+  "config.example.json",
+  "CHANGELOG.md"
 ) + $pythonFiles
 
 foreach ($file in ($files | Sort-Object -Unique)) {
@@ -98,7 +99,7 @@ foreach ($file in ($files | Sort-Object -Unique)) {
 
 Get-ChildItem -LiteralPath $stageRoot -Recurse -Directory |
   Where-Object {
-    $_.Name -in @("__pycache__", ".pio-venv")
+    $_.Name -in @("__pycache__", ".pio-venv", ".pio")
   } |
   Sort-Object FullName -Descending |
   Remove-Item -Recurse -Force
