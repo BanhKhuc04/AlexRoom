@@ -1,5 +1,14 @@
 # Changelog
 
+# ALEX v0.6.0
+
+Previous version: 0.5.0
+Commits included: 1
+
+## Features
+
+- feat: add one-click release preparation (`87a471b`)
+
 # ALEX v0.5.0
 
 Previous version: 0.4.0
