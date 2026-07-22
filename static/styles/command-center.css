@@ -134,3 +134,86 @@
 .device-twin-grid { display: grid; grid-template-columns: minmax(0,680px); margin: 22px 0; }
 .test-led-card { border-color: var(--alex-line-strong); }
 .legacy-relays { opacity: .58; }
+
+
+/* ALEX System Health Dashboard */
+
+.workspace-status-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+}
+
+.workspace-status-strip strong {
+  font-size: 0.9rem;
+  letter-spacing: 0.08em;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(145px, 1fr)
+  );
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.metric-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.metric-card > span {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  opacity: 0.65;
+}
+
+.metric-card h3 {
+  margin: 0 0 5px;
+  font-size: 1rem;
+}
+
+.metric-card p {
+  margin: 0;
+  font-size: 0.76rem;
+  line-height: 1.4;
+  opacity: 0.68;
+  overflow-wrap: anywhere;
+}
+
+.system-health-footer {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 0.7rem;
+  opacity: 0.62;
+}
+
+@media (max-width: 640px) {
+  .workspace-status-strip {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .metric-grid {
+    grid-template-columns: repeat(
+      2,
+      minmax(0, 1fr)
+    );
+  }
+}
+

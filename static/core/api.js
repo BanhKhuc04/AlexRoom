@@ -73,11 +73,11 @@ export class AlexApi {
 
   /** @returns {Promise<SystemSnapshot>} */
   async getSnapshot() {
-    const [health, config, device, system, eventPayload, v1Devices, v1Commands, otaPayload] = await Promise.all([
+    const [health, config, device, system, systemHealth, eventPayload, v1Devices, v1Commands, otaPayload] = await Promise.all([
       this.request("/health"),
       this.request("/api/config"),
       this.request("/api/devices/esp01"),
-      this.request("/api/system"),
+      this.request("/api/system"), this.request("/api/system/health").catch(() => null),
       this.request("/api/events"),
       this.request("/api/v1/devices"),
       this.request("/api/v1/commands?limit=1"),
@@ -88,7 +88,7 @@ export class AlexApi {
       health: /** @type {HealthPayload} */ (health),
       config: /** @type {ConfigPayload} */ (config),
       device: /** @type {DevicePayload} */ (device),
-      system: /** @type {SystemPayload} */ (system),
+      system: /** @type {SystemPayload} */ (system), systemHealth,
       events: /** @type {{items: EventItem[]}} */ (eventPayload).items ?? [],
       v1Device: /** @type {{items: import("./domain").V1Device[]}} */ (v1Devices).items?.find((item) => item.node_id === "esp01") ?? null,
       currentCommand: /** @type {{items: import("./domain").V1Command[]}} */ (v1Commands).items?.[0] ?? null,

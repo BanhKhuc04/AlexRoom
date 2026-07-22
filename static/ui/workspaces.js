@@ -158,13 +158,229 @@ function renderLogs(snapshot) {
 
 /** @param {SystemSnapshot | null} snapshot */
 function renderSystem(snapshot) {
-  const system = snapshot?.system;
-  return `<article class="workspace-panel"><h2>Alex Core host</h2><p>Các số dưới đây đến từ host đang chạy FastAPI, không phải dữ liệu demo.</p><div class="relay-grid">
-    <article class="relay-card"><header><div><span>MEMORY</span><h3>${system ? `${system.memory.percent}%` : "—"}</h3><p>${system ? `${Math.round(system.memory.used / 1048576)} / ${Math.round(system.memory.total / 1048576)} MB` : "Không có dữ liệu"}</p></div></header></article>
-    <article class="relay-card"><header><div><span>STORAGE</span><h3>${system ? `${system.disk.percent}%` : "—"}</h3><p>Disk volume của Alex Core</p></div></header></article>
-    <article class="relay-card"><header><div><span>THERMAL</span><h3>${system?.temperature_c == null ? "—" : `${system.temperature_c}°C`}</h3><p>CPU thermal zone</p></div></header></article>
-    <article class="relay-card"><header><div><span>UPTIME</span><h3>${system ? formatUptime(system.uptime_seconds) : "—"}</h3><p>Tailscale: ${escapeHtml(system?.tailscale_ip ?? "—")}</p></div></header></article>
-  </div></article>`;
+  const system = snapshot?.system ?? null;
+  const envelope = snapshot?.systemHealth ?? null;
+  const report = envelope?.report ?? null;
+  const checks = report?.checks ?? {};
+
+  const database = checks.database ?? {};
+  const disk = checks.disk ?? {};
+  const memory = checks.memory ?? {};
+  const thermal = checks.cpu_temperature ?? {};
+  const load = checks.load_average ?? {};
+  const backup = checks.backup ?? {};
+  const core = checks.core_service ?? {};
+  const runtime = checks.core_runtime ?? {};
+  const updateTimer = checks.update_timer ?? {};
+  const update = checks.update ?? {};
+  const hardware = checks.hardware_runtime ?? {};
+
+  const statusText = (value) =>
+    String(value ?? "unknown").toUpperCase();
+
+  const overall = statusText(
+    envelope?.status
+    ?? report?.status
+    ?? "unknown"
+  );
+
+  const monitorState =
+    envelope?.available !== true
+      ? "NO REPORT"
+      : envelope?.stale
+        ? "STALE"
+        : "LIVE";
+
+  const mqtt = statusText(
+    hardware.mqtt
+    ?? snapshot?.health?.mqtt
+    ?? "unknown"
+  );
+
+  const esp01 = statusText(
+    hardware.device
+    ?? snapshot?.v1Device?.connection
+    ?? "unknown"
+  );
+
+  const ramPercent =
+    memory.used_percent
+    ?? system?.memory?.percent
+    ?? null;
+
+  const cpuTemp =
+    thermal.celsius
+    ?? system?.temperature_c
+    ?? null;
+
+  const diskFree =
+    disk.free_percent
+    ?? (
+      system?.disk?.percent == null
+        ? null
+        : 100 - system.disk.percent
+    );
+
+  const uptime =
+    report?.uptime_seconds
+    ?? system?.uptime_seconds
+    ?? null;
+
+  return `
+<div class="workspace-status-strip">
+  <span>SYSTEM HEALTH</span>
+  <strong>${escapeHtml(overall)}</strong>
+  <span>${escapeHtml(monitorState)}</span>
+</div>
+
+<div class="metric-grid">
+
+  <article class="metric-card">
+    <span>CORE</span>
+    <h3>${escapeHtml(statusText(core.status))}</h3>
+    <p>
+      PID ${runtime.main_pid ?? "?"} ?
+      Restarts ${runtime.restart_count ?? "?"}
+    </p>
+  </article>
+
+  <article class="metric-card">
+    <span>DATABASE</span>
+    <h3>${escapeHtml(statusText(database.status))}</h3>
+    <p>
+      ${
+        database.size_bytes == null
+          ? "Size ?"
+          : `${Math.round(database.size_bytes / 1024)} KB`
+      }
+    </p>
+  </article>
+
+  <article class="metric-card">
+    <span>MQTT</span>
+    <h3>${escapeHtml(mqtt)}</h3>
+    <p>${escapeHtml(hardware.message ?? "Runtime")}</p>
+  </article>
+
+  <article class="metric-card">
+    <span>ESP01</span>
+    <h3>${escapeHtml(esp01)}</h3>
+    <p>
+      Heartbeat ${
+        hardware.heartbeat_age_seconds == null
+          ? "?"
+          : `${hardware.heartbeat_age_seconds}s`
+      }
+    </p>
+  </article>
+
+  <article class="metric-card">
+    <span>BACKUP</span>
+    <h3>${escapeHtml(statusText(backup.status))}</h3>
+    <p>
+      ${backup.backup_count ?? 0} b?n ?
+      ${
+        backup.age_hours == null
+          ? "age ?"
+          : `${backup.age_hours}h`
+      }
+    </p>
+  </article>
+
+  <article class="metric-card">
+    <span>OTA</span>
+    <h3>${escapeHtml(statusText(update.status))}</h3>
+    <p>
+      Timer ${escapeHtml(statusText(updateTimer.status))}
+    </p>
+  </article>
+
+</div>
+
+<div class="metric-grid">
+
+  <article class="metric-card">
+    <span>RAM</span>
+    <h3>${
+      ramPercent == null
+        ? "?"
+        : `${ramPercent}%`
+    }</h3>
+    <p>System memory</p>
+  </article>
+
+  <article class="metric-card">
+    <span>CPU TEMP</span>
+    <h3>${
+      cpuTemp == null
+        ? "?"
+        : `${cpuTemp}?C`
+    }</h3>
+    <p>CPU thermal zone</p>
+  </article>
+
+  <article class="metric-card">
+    <span>DISK FREE</span>
+    <h3>${
+      diskFree == null
+        ? "?"
+        : `${diskFree}%`
+    }</h3>
+    <p>${escapeHtml(statusText(disk.status))}</p>
+  </article>
+
+  <article class="metric-card">
+    <span>LOAD 1 / 5 / 15</span>
+    <h3>${
+      load.load_1m == null
+        ? "?"
+        : `${load.load_1m} / ${load.load_5m} / ${load.load_15m}`
+    }</h3>
+    <p>${load.cpu_count ?? "?"} CPU</p>
+  </article>
+
+  <article class="metric-card">
+    <span>UPTIME</span>
+    <h3>${
+      uptime == null
+        ? "?"
+        : formatUptime(uptime)
+    }</h3>
+    <p>
+      ${
+        report?.boot_time
+          ? escapeHtml(report.boot_time)
+          : "Boot time ?"
+      }
+    </p>
+  </article>
+
+  <article class="metric-card">
+    <span>ALEX VERSION</span>
+    <h3>${escapeHtml(report?.alex_version ?? "?")}</h3>
+    <p>
+      Health schema ${report?.schema_version ?? "?"}
+    </p>
+  </article>
+
+</div>
+
+<div class="system-health-footer">
+  <span>
+    REPORT AGE /
+    ${
+      envelope?.file_age_seconds == null
+        ? "?"
+        : `${envelope.file_age_seconds}s`
+    }
+  </span>
+
+  <span>
+    TAILSCALE /
+    ${escapeHtml(system?.tailscale_ip ?? "?")}
+  </span>
+</div>
+`;
 }
 
 /** @param {string} workspace */
