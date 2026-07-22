@@ -163,11 +163,30 @@ class TestAcceptance(unittest.TestCase):
             alex_acceptance.main()
         self.mock_exit.assert_called_with(1)
 
-    def test_stale_heartbeat(self):
+    def test_stale_heartbeat_seconds(self):
         self.set_system_state(stale_heartbeat=True)
         with self.assertRaises(Exception):
             alex_acceptance.main()
         self.mock_exit.assert_called_with(1)
+
+    def test_legacy_heartbeat_age_ignored(self):
+        # Even if legacy heartbeat_age is stale, if heartbeat_age_seconds is missing or healthy, it should ignore the legacy field
+        # We simulate stale_heartbeat=False (so heartbeat_age_seconds=10) but inject a stale heartbeat_age
+        self.set_system_state(stale_heartbeat=False)
+        
+        # Retrieve the data it would have returned
+        mock_resp = self.mock_urlopen.return_value.__enter__.return_value
+        health_data = json.loads(mock_resp.read.return_value.decode("utf-8"))
+        
+        # Inject the stale legacy field
+        health_data["report"]["checks"]["hardware_runtime"]["heartbeat_age"] = 100
+        mock_resp.read.return_value = json.dumps(health_data).encode("utf-8")
+        
+        with self.assertRaises(Exception):
+            alex_acceptance.main()
+        
+        # It should exit with 0 because heartbeat_age is ignored
+        self.mock_exit.assert_called_with(0)
 
     def test_missing_health_timer(self):
         self.set_system_state(missing_health_timer=True)

@@ -266,7 +266,7 @@ class TestAutoUpdate(unittest.TestCase):
         
         lkg = auto_update.get_lkg()
         self.assertEqual(lkg.get("commit"), "commit_a")
-        self.mock_record_history.assert_called_with("commit_a", "commit_a", "LKG_BOOTSTRAPPED", "Bootstrap on missing LKG")
+        self.mock_record_history.assert_called_with("commit_a", "commit_a", "LKG_BOOTSTRAPPED", "Current running HEAD verified healthy")
 
     def test_lkg_bootstrap_missing_unhealthy(self):
         os.remove(self.lkg_file)
@@ -277,7 +277,7 @@ class TestAutoUpdate(unittest.TestCase):
         self.mock_exit.assert_called_with(1)
         
         self.assertFalse(os.path.exists(self.lkg_file))
-        self.mock_record_history.assert_not_called()
+        self.mock_record_history.assert_called_with("commit_a", "commit_a", "LKG_BOOTSTRAP_FAILED", "unhealthy")
 
     def test_lkg_bootstrap_existing_lkg_not_overwritten(self):
         # LKG is already pre-seeded as seeded_lkg_commit

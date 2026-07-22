@@ -239,9 +239,10 @@ def run_update():
         if check_health(timeout=10):
             logging.info("Current HEAD is healthy. Bootstrapping as LKG.")
             mark_lkg(old_commit)
-            record_history(old_commit, old_commit, "LKG_BOOTSTRAPPED", "Bootstrap on missing LKG")
+            record_history(old_commit, old_commit, "LKG_BOOTSTRAPPED", "Current running HEAD verified healthy")
         else:
-            logging.error("Current HEAD is unhealthy. Aborting OTA safely (LKG absent).")
+            logging.error("LKG_BOOTSTRAP_FAILED")
+            record_history(old_commit, old_commit, "LKG_BOOTSTRAP_FAILED", "unhealthy")
             sys.exit(1)
             
     logging.info("Fetching origin main...")
