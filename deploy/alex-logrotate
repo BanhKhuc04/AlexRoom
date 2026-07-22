@@ -1,0 +1,11 @@
+/var/log/alex/*.log {
+    daily
+    rotate 14
+    maxsize 20M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su vanhkhuc vanhkhuc
+}
