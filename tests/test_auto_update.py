@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch, call, MagicMock
 
@@ -124,19 +125,41 @@ class TestAutoUpdate(unittest.TestCase):
         self.mock_record_history.assert_called_with("commit_a", "commit_b", "CRITICAL_ROLLBACK_FAILURE", "Health check failed")
 
     def test_10_secrets_never_appear_in_update_history(self):
-        # Record history just takes the commits and messages. We test that the log entry
-        # doesn't dump env vars by asserting how record_history creates the payload.
+        # Test the real history writer using a temporary path instead of
+        # the production /var/lib/alex directory.
         patch.stopall()
-        # Mock run_cmd to return a fake commit message without secrets
-        with patch.object(auto_update, "run_cmd", return_value="fix: safe fix") as mock_cmd, \
-             patch("builtins.open", new_callable=unittest.mock.mock_open) as mock_file:
-            auto_update.record_history("commit_a", "commit_b", "SUCCESS")
-            # Get what was written
-            written = mock_file().write.call_args[0][0]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_path = os.path.join(
+                temp_dir,
+                "update-history.jsonl",
+            )
+
+            with patch.object(
+                auto_update,
+                "HISTORY_FILE",
+                history_path,
+            ), patch.object(
+                auto_update,
+                "run_cmd",
+                return_value="fix: safe fix",
+            ):
+                auto_update.record_history(
+                    "commit_a",
+                    "commit_b",
+                    "SUCCESS",
+                )
+
+            with open(
+                history_path,
+                "r",
+                encoding="utf-8",
+            ) as history_file:
+                written = history_file.read()
+
             data = json.loads(written)
             self.assertEqual(data["changes"], ["fix: safe fix"])
             self.assertEqual(data["result"], "SUCCESS")
-            # Ensure no env secrets are implicitly dumped
             self.assertNotIn("MQTT_PASSWORD", written)
             self.assertNotIn("ALEX_API_KEY", written)
 
