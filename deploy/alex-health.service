@@ -1,0 +1,14 @@
+[Unit]
+Description=ALEX NEXUS OS health monitor
+After=local-fs.target alex-core.service
+Wants=alex-core.service
+
+[Service]
+Type=oneshot
+User=vanhkhuc
+WorkingDirectory=/opt/alex/AlexRoom-0.2.0-hardware-rc
+
+UMask=0077
+Nice=10
+
+ExecStart=/opt/alex/AlexRoom-0.2.0-hardware-rc/.venv/bin/python /opt/alex/AlexRoom-0.2.0-hardware-rc/alex_health.py --database /var/lib/alex/alex.db --backup-dir /var/lib/alex/backups --disk-path /var/lib/alex --service alex-core.service --output /var/lib/alex/health/health.json
