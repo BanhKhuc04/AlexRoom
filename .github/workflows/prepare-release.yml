@@ -1,0 +1,433 @@
+name: ALEX Prepare Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type PREPARE to create and push the release commit"
+        required: true
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: alex-release-control
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare ALEX release commit
+    runs-on: ubuntu-latest
+
+    env:
+      PREPARE_CONFIRM: ${{ inputs.confirm }}
+
+    steps:
+      - name: Checkout main with full history
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          package-manager-cache: false
+
+      - name: Validate preparation request
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "$PREPARE_CONFIRM" != "PREPARE" ]]; then
+            echo "ERROR: Release preparation requires confirm=PREPARE"
+            exit 1
+          fi
+
+          git fetch origin main --tags
+
+          LOCAL_COMMIT="$(git rev-parse HEAD)"
+          REMOTE_COMMIT="$(git rev-parse origin/main)"
+
+          if [[ "$LOCAL_COMMIT" != "$REMOTE_COMMIT" ]]; then
+            echo "ERROR: Checked-out commit is not origin/main"
+            exit 1
+          fi
+
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "ERROR: Working tree is not clean"
+            git status --short
+            exit 1
+          fi
+
+          CURRENT_VERSION="$(tr -d '\r\n' < VERSION)"
+          CURRENT_TAG="v$CURRENT_VERSION"
+
+          if ! git rev-parse \
+            --verify \
+            --quiet \
+            "refs/tags/$CURRENT_TAG" >/dev/null
+          then
+            echo "ERROR: Current canonical version $CURRENT_VERSION"
+            echo "does not have a stable tag $CURRENT_TAG."
+            echo
+            echo "This usually means a release has already been"
+            echo "prepared but has not been published yet."
+            echo
+            echo "Publish the current prepared release before"
+            echo "preparing another version."
+            exit 1
+          fi
+
+          TAG_COMMIT="$(git rev-parse "$CURRENT_TAG^{commit}")"
+
+          if ! git merge-base \
+            --is-ancestor \
+            "$TAG_COMMIT" \
+            HEAD
+          then
+            echo "ERROR: Current stable tag is not an ancestor of HEAD"
+            exit 1
+          fi
+
+          echo "Preparation request validated"
+          echo "Current version: $CURRENT_VERSION"
+          echo "Current stable tag: $CURRENT_TAG"
+          echo "HEAD: $(git rev-parse --short HEAD)"
+
+      - name: Calculate next release
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import sys
+          from pathlib import Path
+
+          root = Path.cwd()
+
+          sys.path.insert(0, str(root))
+          sys.path.insert(0, str(root / "scripts"))
+
+          from next_version import calculate_release
+
+          result = calculate_release()
+
+          if not result["releaseRequired"]:
+              raise SystemExit(
+                  "ERROR: No release is currently required."
+              )
+
+          current_version = str(
+              result["currentVersion"]
+          )
+
+          next_version = str(
+              result["nextVersion"]
+          )
+
+          bump = str(
+              result["bump"]
+          )
+
+          print(
+              f"current_version={current_version}"
+          )
+
+          print(
+              f"next_version={next_version}"
+          )
+
+          print(
+              f"bump={bump}"
+          )
+          PY
+
+          NEXT_VERSION="$(
+            python - <<'PY'
+          import sys
+          from pathlib import Path
+
+          root = Path.cwd()
+
+          sys.path.insert(0, str(root))
+          sys.path.insert(0, str(root / "scripts"))
+
+          from next_version import calculate_release
+
+          result = calculate_release()
+
+          print(result["nextVersion"])
+          PY
+          )"
+
+          TAG="v$NEXT_VERSION"
+
+          if git rev-parse \
+            --verify \
+            --quiet \
+            "refs/tags/$TAG" >/dev/null
+          then
+            echo "ERROR: Target tag already exists: $TAG"
+            exit 1
+          fi
+
+          echo "Next release: $TAG"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Install Node.js dependencies
+        run: npm ci
+
+      - name: Apply release files
+        run: |
+          python scripts/apply_release.py --apply
+
+      - name: Validate prepared files
+        shell: bash
+        env:
+          NEXT_VERSION: ${{ steps.release.outputs.next_version }}
+        run: |
+          set -euo pipefail
+
+          EXPECTED_FILES="$(
+            printf '%s\n' \
+              CHANGELOG.md \
+              VERSION \
+              package-lock.json \
+              package.json \
+            | sort
+          )"
+
+          ACTUAL_FILES="$(
+            git status --porcelain \
+            | sed 's/^...//' \
+            | sort
+          )"
+
+          if [[ "$ACTUAL_FILES" != "$EXPECTED_FILES" ]]; then
+            echo "ERROR: Unexpected files changed"
+            echo "during release preparation"
+            echo
+            echo "Expected:"
+            printf '%s\n' "$EXPECTED_FILES"
+            echo
+            echo "Actual:"
+            printf '%s\n' "$ACTUAL_FILES"
+            exit 1
+          fi
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          version = os.environ[
+              "NEXT_VERSION"
+          ]
+
+          canonical = Path(
+              "VERSION"
+          ).read_text(
+              encoding="utf-8"
+          ).strip()
+
+          package = json.loads(
+              Path(
+                  "package.json"
+              ).read_text(
+                  encoding="utf-8"
+              )
+          )
+
+          package_lock = json.loads(
+              Path(
+                  "package-lock.json"
+              ).read_text(
+                  encoding="utf-8"
+              )
+          )
+
+          versions = {
+              "VERSION": canonical,
+              "package.json": (
+                  package.get("version")
+              ),
+              "package-lock.json": (
+                  package_lock.get("version")
+              ),
+              "package-lock root": (
+                  package_lock
+                  .get("packages", {})
+                  .get("", {})
+                  .get("version")
+              ),
+          }
+
+          invalid = {
+              name: value
+              for name, value
+              in versions.items()
+              if value != version
+          }
+
+          if invalid:
+              raise SystemExit(
+                  "ERROR: Prepared versions "
+                  "are not synchronized: "
+                  + repr(invalid)
+              )
+
+          changelog = Path(
+              "CHANGELOG.md"
+          ).read_text(
+              encoding="utf-8"
+          )
+
+          expected_start = (
+              "# Changelog\n\n"
+              f"# ALEX v{version}"
+          )
+
+          if not changelog.startswith(
+              expected_start
+          ):
+              raise SystemExit(
+                  "ERROR: CHANGELOG does "
+                  "not start with "
+                  + expected_start
+              )
+
+          print(
+              "Prepared release files validated"
+          )
+
+          print(
+              f"Version: {version}"
+          )
+          PY
+
+      - name: Run full quality gate
+        run: |
+          npm run check:all
+          git diff --check
+
+      - name: Create release commit
+        shell: bash
+        env:
+          NEXT_VERSION: ${{ steps.release.outputs.next_version }}
+        run: |
+          set -euo pipefail
+
+          git config \
+            user.name \
+            "github-actions[bot]"
+
+          git config \
+            user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            CHANGELOG.md \
+            VERSION \
+            package.json \
+            package-lock.json
+
+          if git diff --cached --quiet; then
+            echo "ERROR: No release changes were staged"
+            exit 1
+          fi
+
+          git commit \
+            -m "chore(release): v$NEXT_VERSION"
+
+          SUBJECT="$(
+            git log -1 --pretty=%s
+          )"
+
+          EXPECTED_SUBJECT="chore(release): v$NEXT_VERSION"
+
+          if [[ "$SUBJECT" != "$EXPECTED_SUBJECT" ]]; then
+            echo "ERROR: Release commit subject validation failed"
+            exit 1
+          fi
+
+          echo "Created release commit:"
+          git log -1 --oneline
+
+      - name: Revalidate main before push
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch origin main
+
+          RELEASE_PARENT="$(
+            git rev-parse HEAD^
+          )"
+
+          REMOTE_MAIN="$(
+            git rev-parse origin/main
+          )"
+
+          if [[ "$RELEASE_PARENT" != "$REMOTE_MAIN" ]]; then
+            echo "ERROR: origin/main changed while release"
+            echo "preparation was running."
+            echo
+            echo "Release commit will NOT be pushed."
+            exit 1
+          fi
+
+          echo "origin/main is unchanged"
+          echo "Safe to push release commit"
+
+      - name: Push release commit
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git push origin HEAD:main
+
+          echo "Release commit pushed successfully"
+
+      - name: Preparation summary
+        shell: bash
+        env:
+          CURRENT_VERSION: ${{ steps.release.outputs.current_version }}
+          NEXT_VERSION: ${{ steps.release.outputs.next_version }}
+          BUMP: ${{ steps.release.outputs.bump }}
+        run: |
+          {
+            echo "# ALEX Release Prepared"
+            echo
+            echo "- Previous version: \`$CURRENT_VERSION\`"
+            echo "- Prepared version: \`$NEXT_VERSION\`"
+            echo "- Semantic bump: \`$BUMP\`"
+            echo "- Commit: \`$(git rev-parse --short HEAD)\`"
+            echo
+            echo "The release commit was created and pushed."
+            echo
+            echo "**No tag or GitHub Release was created.**"
+            echo
+            echo "Verify production first."
+            echo
+            echo "Then run **ALEX Release** with:"
+            echo
+            echo "- version: \`$NEXT_VERSION\`"
+            echo "- mode: \`publish\`"
+            echo "- confirm: \`RELEASE\`"
+          } >> "$GITHUB_STEP_SUMMARY"
