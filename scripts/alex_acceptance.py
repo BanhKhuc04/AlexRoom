@@ -130,7 +130,7 @@ def main():
                     hw = checks.get("hardware_runtime", {})
                     if hw.get("mqtt") != "connected": issues.append("mqtt not connected")
                     if hw.get("device") != "online": issues.append("device offline")
-                    if "heartbeat_age" in hw and hw["heartbeat_age"] > 60: issues.append("stale heartbeat")
+                    if "heartbeat_age_seconds" in hw and hw["heartbeat_age_seconds"] > 60: issues.append("stale heartbeat")
                     
                     if issues:
                         report("Health API", False, f"Subsystem issues: {issues}")

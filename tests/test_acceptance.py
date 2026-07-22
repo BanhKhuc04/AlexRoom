@@ -45,6 +45,7 @@ class TestAcceptance(unittest.TestCase):
         missing_backup=False,
         rollback_invalid=False,
         env_secure=True,
+        stale_heartbeat=False,
     ):
         def cmd_side_effect(cmd, **kwargs):
             mock_res = MagicMock()
@@ -92,7 +93,7 @@ class TestAcceptance(unittest.TestCase):
                     "hardware_runtime": {
                         "mqtt": "connected" if mqtt_ok else "disconnected",
                         "device": "online" if esp01_ok else "offline",
-                        "heartbeat_age": 10
+                        "heartbeat_age_seconds": 70 if stale_heartbeat else 10
                     },
                     "database": {"status": "healthy"},
                     "core_service": {"status": "healthy"},
@@ -158,6 +159,12 @@ class TestAcceptance(unittest.TestCase):
 
     def test_stale_health(self):
         self.set_system_state(health_stale=True)
+        with self.assertRaises(Exception):
+            alex_acceptance.main()
+        self.mock_exit.assert_called_with(1)
+
+    def test_stale_heartbeat(self):
+        self.set_system_state(stale_heartbeat=True)
         with self.assertRaises(Exception):
             alex_acceptance.main()
         self.mock_exit.assert_called_with(1)

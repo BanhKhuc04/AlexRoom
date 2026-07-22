@@ -222,7 +222,28 @@ def run_update():
     # Explicitly recover if interrupted
     if state.get("state") != "idle":
         recover_interrupted_state(state, state.get("old_commit", old_commit), state.get("candidate", old_commit))
-    
+        
+    # SAFE LKG BOOTSTRAP
+    has_lkg = False
+    if os.path.exists(LKG_FILE):
+        try:
+            with open(LKG_FILE, "r") as f:
+                lkg_data = json.load(f)
+                if "commit" in lkg_data:
+                    has_lkg = True
+        except Exception:
+            pass
+            
+    if not has_lkg:
+        logging.info("LKG file missing or invalid. Attempting safe bootstrap...")
+        if check_health(timeout=10):
+            logging.info("Current HEAD is healthy. Bootstrapping as LKG.")
+            mark_lkg(old_commit)
+            record_history(old_commit, old_commit, "LKG_BOOTSTRAPPED", "Bootstrap on missing LKG")
+        else:
+            logging.error("Current HEAD is unhealthy. Aborting OTA safely (LKG absent).")
+            sys.exit(1)
+            
     logging.info("Fetching origin main...")
     out, rc = run_cmd(["git", "fetch", "origin", "main"], check=False)
     if rc != 0:

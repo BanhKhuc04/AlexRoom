@@ -26,6 +26,10 @@ class TestAutoUpdate(unittest.TestCase):
         self.state_file = os.path.join(self.temp_dir.name, "ota_state.json")
         self.lkg_file = os.path.join(self.temp_dir.name, "lkg.json")
         
+        # Pre-seed a valid LKG to avoid triggering bootstrap logic in existing tests
+        with open(self.lkg_file, "w") as f:
+            json.dump({"commit": "seeded_lkg_commit", "timestamp": "1970-01-01T00:00:00Z"}, f)
+        
         self.patch_state = patch.object(auto_update, "STATE_FILE", self.state_file).start()
         self.patch_lkg = patch.object(auto_update, "LKG_FILE", self.lkg_file).start()
         
@@ -241,24 +245,76 @@ class TestAutoUpdate(unittest.TestCase):
         # Should rollback
         self.mock_record_history.assert_called_with("commit_a", "commit_b", "UPDATE_FAILED_ROLLED_BACK", "Health check failed after recovery")
 
-    def test_19_interrupted_rollback(self):
+    def test_interrupted_rollback_recovers(self):
         self.set_git_responses(old="commit_a", new="commit_b")
-        auto_update.set_state({"state": "rolling_back", "old_commit": "commit_a", "candidate": "commit_b"})
+        state = {"state": "rolling_back", "candidate": "commit_b", "old_commit": "commit_a"}
+        auto_update.set_state(state)
+        with self.assertRaises(Exception):
+            auto_update.run_update()
+        self.mock_exit.assert_called_with(1)
+        self.mock_record_history.assert_called_with("commit_a", "commit_b", "UPDATE_FAILED_ROLLED_BACK", "Interrupted during rollback")
+        self.assertEqual(auto_update.get_state().get("state"), "idle")
+
+    def test_lkg_bootstrap_missing_healthy(self):
+        # Remove the pre-seeded LKG
+        os.remove(self.lkg_file)
+        self.set_git_responses(old="commit_a", new="commit_a")
         self.mock_check_health.return_value = True
+        with self.assertRaises(Exception):
+            auto_update.run_update()
+        self.mock_exit.assert_called_with(0)
+        
+        lkg = auto_update.get_lkg()
+        self.assertEqual(lkg.get("commit"), "commit_a")
+        self.mock_record_history.assert_called_with("commit_a", "commit_a", "LKG_BOOTSTRAPPED", "Bootstrap on missing LKG")
+
+    def test_lkg_bootstrap_missing_unhealthy(self):
+        os.remove(self.lkg_file)
+        self.set_git_responses(old="commit_a", new="commit_a")
+        self.mock_check_health.return_value = False
+        with self.assertRaises(Exception):
+            auto_update.run_update()
+        self.mock_exit.assert_called_with(1)
+        
+        self.assertFalse(os.path.exists(self.lkg_file))
+        self.mock_record_history.assert_not_called()
+
+    def test_lkg_bootstrap_existing_lkg_not_overwritten(self):
+        # LKG is already pre-seeded as seeded_lkg_commit
+        self.set_git_responses(old="commit_a", new="commit_a")
+        with self.assertRaises(Exception):
+            auto_update.run_update()
+        self.mock_exit.assert_called_with(0)
+        
+        lkg = auto_update.get_lkg()
+        self.assertEqual(lkg.get("commit"), "seeded_lkg_commit")
+
+    def test_candidate_never_marked_lkg_before_health(self):
+        self.set_git_responses(old="commit_a", new="commit_b", merge_base="commit_a")
+        # Fail health check after activation
+        self.mock_check_health.return_value = False
         with self.assertRaises(Exception):
             auto_update.run_update()
             
         self.mock_exit.assert_called_with(1)
-        self.mock_record_history.assert_called_with("commit_a", "commit_b", "UPDATE_FAILED_ROLLED_BACK", "Interrupted during rollback")
+        
+        # Verify LKG is still the pre-seeded one, NOT commit_b
+        lkg = auto_update.get_lkg()
+        self.assertEqual(lkg.get("commit"), "seeded_lkg_commit")
 
     import sys
     @unittest.skipIf(sys.platform == "win32", "fcntl not available on Windows")
     @patch("fcntl.flock")
     def test_20_concurrent_updater_lock(self, mock_flock):
+        import tempfile
         # Simulate a lock file existing that cannot be acquired
         mock_flock.side_effect = BlockingIOError("Concurrent lock")
-        with self.assertRaises(Exception):
-            auto_update.main()
+        with tempfile.TemporaryDirectory() as temp_repo:
+            temp_lock = os.path.join(temp_repo, "lockfile")
+            with patch.object(auto_update, "REPO_DIR", temp_repo), \
+                 patch.object(auto_update, "LOCK_FILE", temp_lock):
+                with self.assertRaises(Exception):
+                    auto_update.main()
         self.mock_exit.assert_called_with(0)
 
 if __name__ == "__main__":
