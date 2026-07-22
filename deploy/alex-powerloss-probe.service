@@ -1,0 +1,13 @@
+[Unit]
+Description=ALEX dirty-shutdown SQLite probe
+After=local-fs.target
+
+[Service]
+Type=simple
+User=vanhkhuc
+WorkingDirectory=/opt/alex/AlexRoom-0.2.0-hardware-rc
+UMask=0077
+
+ExecStart=/opt/alex/AlexRoom-0.2.0-hardware-rc/.venv/bin/python /opt/alex/AlexRoom-0.2.0-hardware-rc/alex_powerloss_probe.py --database /var/lib/alex/powerloss/probe.db --marker /var/lib/alex/powerloss/armed.json --committed 20 --reset
+
+Restart=no
