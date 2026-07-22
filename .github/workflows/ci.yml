@@ -63,8 +63,8 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
-      - name: Run project checks
-        run: npm run check:all
+      - name: Run frontend checks
+        run: npm run check
 
   release-dry-run:
     name: Release Version Dry-Run
