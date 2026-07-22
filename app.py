@@ -397,7 +397,11 @@ def on_message(
         elif topic == HEARTBEAT_TOPIC:
             command_service.handle_heartbeat(document, message_source)
         elif topic == STATUS_TOPIC and document.get("online") is False:
-            command_service.mark_offline()
+            # MQTT Last Will means the ESP MQTT session disappeared.
+            # Treat it as degraded first. The heartbeat watchdog is the
+            # authoritative boundary for promoting sustained loss to offline.
+            # Commands require connection == "online", so this remains fail-safe.
+            command_service.mark_degraded()
         elif topic == OTA_STATUS_TOPIC:
             ota_service.handle_ota_status(DEVICE_ID, document)
         else:
