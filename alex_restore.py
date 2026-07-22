@@ -93,6 +93,9 @@ def create_emergency_copy(
         exist_ok=True,
     )
 
+    if os.name != "nt":
+        os.chmod(recovery_dir, 0o700)
+
     destination = (
         recovery_dir
         / f"alex-pre-restore-{utc_stamp()}.db"
@@ -102,6 +105,10 @@ def create_emergency_copy(
         database_path,
         destination,
     )
+
+    # Emergency copy contains the complete production DB.
+    if os.name != "nt":
+        os.chmod(destination, 0o600)
 
     return destination
 

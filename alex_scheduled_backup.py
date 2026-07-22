@@ -42,6 +42,10 @@ def create_verified_backup(
 
     destination.parent.mkdir(parents=True, exist_ok=True)
 
+    # Backup directory itself must not be world-readable.
+    if os.name != "nt":
+        os.chmod(destination.parent, 0o700)
+
     temporary = destination.with_name(
         destination.name + ".tmp"
     )
@@ -89,6 +93,11 @@ def create_verified_backup(
             source.close()
 
     temporary.replace(destination)
+
+    # Backup database contains production state.
+    # Restrict access explicitly on POSIX systems.
+    if os.name != "nt":
+        os.chmod(destination, 0o600)
 
     return destination
 

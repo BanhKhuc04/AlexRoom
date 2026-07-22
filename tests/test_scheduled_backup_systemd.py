@@ -34,7 +34,7 @@ def test_backup_timer_wiring():
     text = TIMER.read_text(encoding="ascii")
 
     assert "[Timer]" in text
-    assert "OnCalendar=*-*-* 03:15:00" in text
+    assert "OnCalendar=*-*-* 03:15:00 Asia/Ho_Chi_Minh" in text
     assert "Persistent=true" in text
     assert "RandomizedDelaySec=5m" in text
     assert "Unit=alex-backup.service" in text

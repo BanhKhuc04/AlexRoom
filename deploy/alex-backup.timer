@@ -2,7 +2,7 @@
 Description=Run ALEX scheduled backup daily
 
 [Timer]
-OnCalendar=*-*-* 03:15:00
+OnCalendar=*-*-* 03:15:00 Asia/Ho_Chi_Minh
 Persistent=true
 RandomizedDelaySec=5m
 AccuracySec=1m
