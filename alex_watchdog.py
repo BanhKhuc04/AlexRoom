@@ -143,25 +143,33 @@ def service_is_active(
     )
 
 
-def restart_service(
+def force_recover_service(
     service_name: str,
 ) -> None:
+    """Force-kill a hung service.
+
+    alex-core.service owns the restart policy. The watchdog only
+    forces the unhealthy process to exit; systemd then performs
+    the bounded Restart=on-failure recovery.
+    """
 
     result = subprocess.run(
         [
             "systemctl",
-            "restart",
+            "kill",
+            "--kill-who=all",
+            "--signal=SIGKILL",
             service_name,
         ],
         capture_output=True,
         text=True,
-        timeout=45,
+        timeout=10,
         check=False,
     )
 
     if result.returncode != 0:
         raise RuntimeError(
-            "restart_failed:"
+            "force_kill_failed:"
             + (
                 result.stderr.strip()
                 or result.stdout.strip()
@@ -250,7 +258,7 @@ def watchdog_iteration(
         # If systemd already considers the service dead,
         # Restart=on-failure remains the primary recovery layer.
         if service_is_active(service_name):
-            restart_service(
+            force_recover_service(
                 service_name
             )
 
@@ -264,7 +272,7 @@ def watchdog_iteration(
 
             state[
                 "action"
-            ] = "service_restarted"
+            ] = "forced_recovery"
 
         else:
             state[

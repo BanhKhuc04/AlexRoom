@@ -60,7 +60,7 @@ def test_first_failure_does_not_restart(
 
     monkeypatch.setattr(
         alex_watchdog,
-        "restart_service",
+        "force_recover_service",
         lambda service: (
             restarted.append(service)
         ),
@@ -116,7 +116,7 @@ def test_threshold_restarts_active_service(
 
     monkeypatch.setattr(
         alex_watchdog,
-        "restart_service",
+        "force_recover_service",
         lambda service: (
             restarted.append(service)
         ),
@@ -139,7 +139,7 @@ def test_threshold_restarts_active_service(
 
     assert (
         result["action"]
-        == "service_restarted"
+        == "forced_recovery"
     )
 
     assert (
@@ -180,7 +180,7 @@ def test_cooldown_blocks_restart(
 
     monkeypatch.setattr(
         alex_watchdog,
-        "restart_service",
+        "force_recover_service",
         lambda service: (
             restarted.append(service)
         ),
