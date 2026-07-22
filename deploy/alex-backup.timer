@@ -1,0 +1,12 @@
+[Unit]
+Description=Run ALEX scheduled backup daily
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+RandomizedDelaySec=5m
+AccuracySec=1m
+Unit=alex-backup.service
+
+[Install]
+WantedBy=timers.target
