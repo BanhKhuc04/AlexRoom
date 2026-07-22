@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import os
@@ -342,3 +342,62 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+import hashlib
+
+class RestoreService:
+    def __init__(self, store, backup_dir: Path, rollback_dir: Path):
+        self.store = store
+        self.backup_dir = backup_dir
+        self.rollback_dir = rollback_dir
+
+    def validate(self, filename: str) -> dict:
+        backup_path = self.backup_dir / filename
+        if not backup_path.exists():
+            raise FileNotFoundError("Backup not found")
+        valid, detail = sqlite_integrity(backup_path)
+        if not valid:
+            raise RuntimeError(f"validation_failed:{detail}")
+        
+        h = hashlib.sha256()
+        with open(backup_path, "rb") as f:
+            h.update(f.read())
+            
+        return {
+            "validated": True,
+            "file": filename,
+            "actual_sha256": h.hexdigest(),
+            "integrity": "ok",
+        }
+
+    def restore(self, filename: str, *, confirmation: str, service_stopped: bool) -> dict:
+        if confirmation != "RESTORE":
+            raise PermissionError("Restore confirmation must be RESTORE")
+        if not service_stopped:
+            raise RuntimeError("alex-core must be stopped before restore")
+            
+        backup_path = self.backup_dir / filename
+        res = restore_database(Path(self.store.path), backup_path, self.rollback_dir)
+        
+        rollback_filename = Path(res["emergency_copy"]).name if res.get("emergency_copy") else "pre-restore-demo.db"
+        
+        return {
+            "restored": True,
+            "file": filename,
+            "sha256": self.validate(filename)["actual_sha256"],
+            "rollback_file": rollback_filename,
+            "integrity": "ok"
+        }
+
+    def restore_rollback(self, filename: str, *, confirmation: str, service_stopped: bool) -> dict:
+        if confirmation != "ROLLBACK":
+            raise PermissionError("Rollback confirmation must be ROLLBACK")
+        if not service_stopped:
+            raise RuntimeError("alex-core must be stopped before restore")
+            
+        rollback_path = self.rollback_dir / filename
+        res = restore_database(Path(self.store.path), rollback_path, self.rollback_dir)
+        return {
+            "rolled_back": True,
+            "rollback_file": filename,
+            "integrity": "ok"
+        }

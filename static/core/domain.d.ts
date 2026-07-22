@@ -94,6 +94,7 @@ export interface SystemSnapshot {
   v1Device: V1Device | null;
   currentCommand: V1Command | null;
   otaInfo: OtaInfo | null;
+  systemHealth?: any;
   receivedAt: string;
 }
 

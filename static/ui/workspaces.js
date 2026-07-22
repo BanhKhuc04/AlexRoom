@@ -175,6 +175,7 @@ function renderSystem(snapshot) {
   const update = checks.update ?? {};
   const hardware = checks.hardware_runtime ?? {};
 
+  /** @param {any} value */
   const statusText = (value) =>
     String(value ?? "unknown").toUpperCase();
 
