@@ -1,0 +1,16 @@
+[Unit]
+Description=ALEX post-boot production acceptance
+After=alex-core.service alex-health.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/alex/AlexRoom-0.2.0-hardware-rc
+
+ExecStartPre=/bin/sleep 20
+
+ExecStart=/opt/alex/AlexRoom-0.2.0-hardware-rc/.venv/bin/python /opt/alex/AlexRoom-0.2.0-hardware-rc/alex_boot_acceptance.py --database /var/lib/alex/alex.db --health /var/lib/alex/health/health.json --output /var/lib/alex/boot/last-boot-check.json
+
+[Install]
+WantedBy=multi-user.target
