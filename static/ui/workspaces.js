@@ -150,10 +150,30 @@ function renderDevices(snapshot) {
   return devicesPanel + otaPanel;
 }
 
-/** @param {SystemSnapshot | null} snapshot */
-function renderLogs(snapshot) {
-  const items = snapshot?.events ?? [];
-  return `<article class="workspace-panel"><h2>Event channel</h2><p>Event deque hiện tại giữ tối đa 80 mục trong memory và mất sau restart.</p><div class="event-summary"><ol>${items.length ? items.map((item) => `<li><time>${formatTime(item.time)}</time><span>${escapeHtml(item.kind.toUpperCase())} · ${escapeHtml(item.message)}</span></li>`).join("") : "<li><time>—</time><span>Chưa có sự kiện từ backend.</span></li>"}</ol></div></article>`;
+/** @param {{payload: import("../core/domain").AuditPayload | null, loading: boolean, error: string | null, onRefresh?: () => void} | null} state */
+export function renderLogs(state) {
+  if (state?.loading) {
+    return `<article class="workspace-panel"><h2>Audit history</h2><p>Đang tải dữ liệu từ database...</p></article>`;
+  }
+  if (state?.error) {
+    return `<article class="workspace-panel"><h2>Audit history</h2><p class="error">${escapeHtml(state.error)}</p><div class="relay-actions"><button type="button" data-refresh-audit>THỬ LẠI</button></div></article>`;
+  }
+  const items = state?.payload?.items ?? [];
+  return `<article class="workspace-panel">
+<h2>Audit history</h2>
+<p>Persistent SQLite audit trail. Realtime events remain used for live state updates.</p>
+<div class="event-summary">
+  <ol>
+    ${items.length ? items.map((item) => {
+      const levelCls = item.level === "success" ? "success" : item.level === "warning" ? "warning" : item.level === "error" ? "error" : "info";
+      return `<li><time>${formatTime(item.created_at)}</time><span class="${levelCls}">[${escapeHtml(item.source)}] ${escapeHtml(String(item.kind).toUpperCase())} · ${escapeHtml(item.message)}</span></li>`;
+    }).join("") : "<li><time>—</time><span>Chưa có sự kiện từ backend.</span></li>"}
+  </ol>
+</div>
+<div class="relay-actions" style="margin-top: 1rem;">
+  <button type="button" data-refresh-audit>LÀM MỚI</button>
+</div>
+</article>`;
 }
 
 /** @param {SystemSnapshot | null} snapshot */
@@ -409,12 +429,19 @@ function renderScenes(snapshot) {
  * @param {HTMLElement} container
  * @param {string} workspace
  * @param {SystemSnapshot | null} snapshot
- * @param {{onRelay: (id: number, action: "ON" | "OFF") => void, onTestLed: (value: boolean) => void, onMode: (mode: import("../core/domain").RoomMode) => void, onSettings: () => void, onOta?: (version: string) => void}} actions
+ * @param {{onRelay: (id: number, action: "ON" | "OFF") => void, onTestLed: (value: boolean) => void, onMode: (mode: import("../core/domain").RoomMode) => void, onSettings: () => void, onOta?: (version: string) => void, auditState?: any}} actions
  */
 export function renderWorkspace(container, workspace, snapshot, actions) {
   if (workspace === "overview") container.innerHTML = renderOverview(snapshot);
   else if (workspace === "devices") container.innerHTML = renderDevices(snapshot);
-  else if (workspace === "logs") container.innerHTML = renderLogs(snapshot);
+  else if (workspace === "logs") {
+    container.innerHTML = renderLogs(actions.auditState);
+    const refreshBtn = container.querySelector("[data-refresh-audit]");
+    if (refreshBtn && actions.auditState?.onRefresh) {
+      refreshBtn.addEventListener("click", () => actions.auditState.onRefresh());
+    }
+  }
+
   else if (workspace === "system") container.innerHTML = renderSystem(snapshot);
   else if (workspace === "scenes") container.innerHTML = renderScenes(snapshot);
   else if (workspace === "settings") container.innerHTML = `<article class="workspace-panel"><h2>Experience settings</h2><p>Điều chỉnh performance/balanced/cinematic, reduced motion và sound modes/gain groups.</p><button class="primary-action" type="button" data-open-experience>MỞ CÀI ĐẶT</button></article>`;

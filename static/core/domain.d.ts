@@ -67,6 +67,20 @@ export interface EventItem {
   details: Record<string, unknown> | null;
 }
 
+export interface AuditRecord {
+  created_at: string;
+  kind: string;
+  level: string;
+  message: string;
+  source: string;
+  details: Record<string, unknown> | null;
+}
+
+export interface AuditPayload {
+  items: AuditRecord[];
+  source: string;
+}
+
 export interface OtaState {
   operation_id: string;
   target_version: string;

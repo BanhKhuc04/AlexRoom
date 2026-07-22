@@ -140,4 +140,17 @@ export class AlexApi {
       body: JSON.stringify({ version: targetVersion }),
     });
   }
+
+  /**
+   * Fetch persistent audit records from SQLite.
+   * @param {number|string|undefined} [limit]
+   * @returns {Promise<import("./domain").AuditPayload>}
+   */
+  async getAudit(limit) {
+    const numericLimit = Number(limit);
+    const boundedLimit = Number.isFinite(numericLimit)
+      ? Math.max(1, Math.min(200, Math.trunc(numericLimit)))
+      : 80;
+    return /** @type {Promise<import("./domain").AuditPayload>} */ (this.request(`/api/v1/audit?limit=${boundedLimit}`));
+  }
 }

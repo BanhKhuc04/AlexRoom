@@ -146,17 +146,49 @@ function setWorkspace(workspace) {
   renderActiveWorkspace();
 }
 
+/** @type {import("./core/domain").AuditPayload | null} */
+let auditPayload = null;
+let auditLoading = false;
+/** @type {string | null} */
+let auditError = null;
+
+function loadAudit(force = false) {
+  if (auditLoading) return;
+  if (!force && auditPayload) return;
+  auditLoading = true;
+  auditError = null;
+  renderActiveWorkspace();
+  api.getAudit().then((payload) => {
+    auditPayload = payload;
+  }).catch((error) => {
+    console.error("Audit load failed", error);
+    auditError = "Lỗi khi tải dữ liệu từ backend. Vui lòng thử lại sau.";
+  }).finally(() => {
+    auditLoading = false;
+    renderActiveWorkspace();
+  });
+}
+
 function renderActiveWorkspace() {
   const metadata = WORKSPACES[activeWorkspace];
   elements.workspaceEyebrow.textContent = metadata.eyebrow;
   elements.workspaceTitle.textContent = metadata.title;
   elements.workspaceDescription.textContent = metadata.description;
+  if (activeWorkspace === "logs") {
+    loadAudit();
+  }
   renderWorkspace(elements.workspaceContent, activeWorkspace, snapshot, {
     onRelay: (id, action) => { void executeRelayCommand(id, action); },
     onTestLed: (value) => { void executeTestLedCommand(value); },
     onMode: (mode) => { void executeModeCommand(mode); },
     onOta: (version) => { void executeOtaCommand(version); },
     onSettings: openExperienceDialog,
+    auditState: {
+      payload: auditPayload,
+      loading: auditLoading,
+      error: auditError,
+      onRefresh: () => loadAudit(true)
+    }
   });
 }
 
