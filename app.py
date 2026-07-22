@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from alex_store import AlexStore, utc_now
+from alex_backup import BackupService
 from alex_hardware import (
     ACK_TOPIC, COMMAND_TOPIC, HEARTBEAT_TOPIC, REPORTED_TOPIC, STATUS_TOPIC, TELEMETRY_TOPIC, OTA_STATUS_TOPIC,
     OTA_COMMAND_TOPIC, CommandService, RealtimeHub,
@@ -38,7 +39,18 @@ from alex_version import ALEX_VERSION
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 CONFIG_PATH = BASE_DIR / "config.json"
-DATABASE_PATH = Path(os.getenv("ALEX_DATABASE_PATH", str(BASE_DIR / "data" / "alex.db")))
+DATABASE_PATH = Path(os.getenv(
+    "ALEX_DATABASE_PATH",
+    str(BASE_DIR / "data" / "alex.db"),
+))
+ALEX_BACKUP_DIR = Path(os.getenv(
+    "ALEX_BACKUP_DIR",
+    str(DATABASE_PATH.parent / "backups"),
+))
+ALEX_BACKUP_RETENTION = int(os.getenv(
+    "ALEX_BACKUP_RETENTION",
+    "7",
+))
 ALEX_FIRMWARE_DIR = Path(os.getenv("ALEX_FIRMWARE_DIR", str(BASE_DIR / "data" / "firmware")))
 
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
@@ -87,6 +99,11 @@ state_lock = threading.Lock()
 event_lock = threading.Lock()
 store_ready = threading.Event()
 store = AlexStore(DATABASE_PATH)
+backup_service = BackupService(
+    store,
+    ALEX_BACKUP_DIR,
+    retention=ALEX_BACKUP_RETENTION,
+)
 realtime_hub = RealtimeHub()
 simulator: Esp01Simulator | None = None
 
@@ -946,12 +963,40 @@ def v1_brain_wake(_: None = Depends(require_mutation_budget)) -> dict[str, Any]:
 
 
 @app.post("/api/v1/backup")
-def v1_backup(_: None = Depends(require_mutation_budget)) -> dict[str, Any]:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    destination = BASE_DIR / "backups" / f"alex-{stamp}.db"
-    store.backup(destination)
-    store.add_audit("backup", f"Created {destination.name}", "success")
-    return {"created": True, "file": destination.name, "source": "local_software"}
+def v1_backup(
+    _: None = Depends(require_mutation_budget),
+) -> dict[str, Any]:
+    result = backup_service.create()
+
+    store.add_audit(
+        "backup",
+        f"Created {result['file']}",
+        "success",
+        details={
+            "sha256": result["sha256"],
+            "size_bytes": result["size_bytes"],
+            "integrity": result["integrity"],
+            "retention_removed": result[
+                "retention_removed"
+            ],
+        },
+    )
+
+    return {
+        "created": True,
+        "backup": result,
+        "source": "local_software",
+    }
+
+
+@app.get("/api/v1/backups")
+def v1_backups() -> dict[str, Any]:
+    return {
+        "items": backup_service.list_backups(),
+        "retention": backup_service.retention,
+        "directory": backup_service.backup_dir.name,
+        "source": "local_software",
+    }
 
 
 @app.put("/api/v1/{domain}/{record_id}")

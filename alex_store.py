@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -253,9 +252,66 @@ class AlexStore:
         return json.loads(row[0]) if row else None
 
     def backup(self, destination: Path) -> Path:
+        """Create a consistent SQLite snapshot and atomically publish it."""
+        destination = Path(destination)
+
+        if destination.resolve() == self.path.resolve():
+            raise ValueError("Backup destination must differ from the live database")
+
         destination.parent.mkdir(parents=True, exist_ok=True)
-        with self._lock:
-            shutil.copy2(self.path, destination)
+
+        temporary = destination.with_name(
+            f".{destination.name}.tmp"
+        )
+
+        if temporary.exists():
+            temporary.unlink()
+
+        try:
+            with self._lock:
+                source = self.connect()
+
+                try:
+                    target = sqlite3.connect(
+                        temporary,
+                        timeout=5,
+                    )
+
+                    try:
+                        source.backup(target)
+                        target.commit()
+
+                        result = target.execute(
+                            "PRAGMA quick_check"
+                        ).fetchone()
+
+                        if (
+                            result is None
+                            or str(result[0]).lower() != "ok"
+                        ):
+                            detail = (
+                                result[0]
+                                if result is not None
+                                else "no result"
+                            )
+
+                            raise RuntimeError(
+                                "Backup integrity check failed: "
+                                f"{detail}"
+                            )
+
+                    finally:
+                        target.close()
+
+                finally:
+                    source.close()
+
+            temporary.replace(destination)
+
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
+
         return destination
 
     def health(self) -> dict[str, Any]:
