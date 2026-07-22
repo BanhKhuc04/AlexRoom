@@ -2,11 +2,12 @@
 
 import argparse
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -86,7 +87,6 @@ def check_disk(
 ) -> dict[str, Any]:
 
     path = path.expanduser().resolve()
-
     usage = shutil.disk_usage(path)
 
     free_percent = (
@@ -131,6 +131,7 @@ def check_backup(
             "status": STATUS_CRITICAL,
             "message": "backup_directory_not_found",
             "path": str(backup_dir),
+            "backup_count": 0,
         }
 
     backups = [
@@ -144,6 +145,7 @@ def check_backup(
             "status": STATUS_CRITICAL,
             "message": "backup_not_found",
             "path": str(backup_dir),
+            "backup_count": 0,
         }
 
     latest = max(
@@ -173,6 +175,7 @@ def check_backup(
         "latest_backup": str(latest),
         "age_hours": round(age_hours, 2),
         "size_bytes": latest.stat().st_size,
+        "backup_count": len(backups),
     }
 
 
@@ -207,6 +210,278 @@ def check_service(service_name: str) -> dict[str, Any]:
     }
 
 
+def systemctl_property(
+    service_name: str,
+    property_name: str,
+) -> str | None:
+    try:
+        result = subprocess.run(
+            [
+                "systemctl",
+                "show",
+                service_name,
+                f"--property={property_name}",
+                "--value",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    value = result.stdout.strip()
+
+    return value or None
+
+
+def check_core_runtime(
+    service_name: str,
+) -> dict[str, Any]:
+
+    restart_raw = systemctl_property(
+        service_name,
+        "NRestarts",
+    )
+
+    pid_raw = systemctl_property(
+        service_name,
+        "MainPID",
+    )
+
+    try:
+        restart_count = (
+            int(restart_raw)
+            if restart_raw is not None
+            else None
+        )
+    except ValueError:
+        restart_count = None
+
+    try:
+        main_pid = (
+            int(pid_raw)
+            if pid_raw is not None
+            else None
+        )
+    except ValueError:
+        main_pid = None
+
+    if restart_count is None:
+        status = STATUS_UNKNOWN
+    elif restart_count >= 5:
+        status = STATUS_WARNING
+    else:
+        status = STATUS_HEALTHY
+
+    return {
+        "status": status,
+        "message": "core_runtime",
+        "service": service_name,
+        "restart_count": restart_count,
+        "main_pid": main_pid,
+    }
+
+
+def parse_meminfo(
+    path: Path = Path("/proc/meminfo"),
+) -> dict[str, int] | None:
+
+    if not path.is_file():
+        return None
+
+    values: dict[str, int] = {}
+
+    try:
+        for line in path.read_text(
+            encoding="utf-8"
+        ).splitlines():
+
+            if ":" not in line:
+                continue
+
+            name, raw = line.split(
+                ":",
+                1,
+            )
+
+            parts = raw.strip().split()
+
+            if not parts:
+                continue
+
+            value = int(parts[0])
+
+            # /proc/meminfo values are normally kB.
+            values[name] = value * 1024
+
+    except (OSError, ValueError):
+        return None
+
+    return values
+
+
+def check_memory(
+    meminfo_path: Path = Path("/proc/meminfo"),
+    warning_percent: float = 85.0,
+    critical_percent: float = 95.0,
+) -> dict[str, Any]:
+
+    info = parse_meminfo(
+        meminfo_path
+    )
+
+    if not info:
+        return {
+            "status": STATUS_UNKNOWN,
+            "message": "memory_unavailable",
+        }
+
+    total = info.get("MemTotal")
+    available = info.get("MemAvailable")
+
+    if not total or available is None:
+        return {
+            "status": STATUS_UNKNOWN,
+            "message": "memory_values_missing",
+        }
+
+    used = max(
+        0,
+        total - available,
+    )
+
+    used_percent = (
+        used / total * 100.0
+    )
+
+    if used_percent >= critical_percent:
+        status = STATUS_CRITICAL
+    elif used_percent >= warning_percent:
+        status = STATUS_WARNING
+    else:
+        status = STATUS_HEALTHY
+
+    return {
+        "status": status,
+        "message": "memory_usage",
+        "total_bytes": total,
+        "available_bytes": available,
+        "used_bytes": used,
+        "used_percent": round(
+            used_percent,
+            2,
+        ),
+    }
+
+
+def check_cpu_temperature() -> dict[str, Any]:
+    candidates = [
+        Path(
+            "/sys/class/thermal/"
+            "thermal_zone0/temp"
+        ),
+        Path(
+            "/sys/class/hwmon/"
+            "hwmon0/temp1_input"
+        ),
+    ]
+
+    temperature = None
+    source = None
+
+    for path in candidates:
+        if not path.is_file():
+            continue
+
+        try:
+            raw = float(
+                path.read_text(
+                    encoding="utf-8"
+                ).strip()
+            )
+        except (OSError, ValueError):
+            continue
+
+        # Linux thermal values are usually millidegrees.
+        temperature = (
+            raw / 1000.0
+            if raw > 1000
+            else raw
+        )
+
+        source = str(path)
+        break
+
+    if temperature is None:
+        return {
+            "status": STATUS_UNKNOWN,
+            "message": "cpu_temperature_unavailable",
+        }
+
+    if temperature >= 85:
+        status = STATUS_CRITICAL
+    elif temperature >= 75:
+        status = STATUS_WARNING
+    else:
+        status = STATUS_HEALTHY
+
+    return {
+        "status": status,
+        "message": "cpu_temperature",
+        "celsius": round(
+            temperature,
+            1,
+        ),
+        "source": source,
+    }
+
+
+def check_load_average() -> dict[str, Any]:
+    if not hasattr(os, "getloadavg"):
+        return {
+            "status": STATUS_UNKNOWN,
+            "message": "load_average_unavailable",
+        }
+
+    try:
+        load_1m, load_5m, load_15m = (
+            os.getloadavg()
+        )
+    except OSError:
+        return {
+            "status": STATUS_UNKNOWN,
+            "message": "load_average_unavailable",
+        }
+
+    cpu_count = os.cpu_count() or 1
+    load_per_cpu = load_5m / cpu_count
+
+    if load_per_cpu >= 2.0:
+        status = STATUS_CRITICAL
+    elif load_per_cpu >= 1.0:
+        status = STATUS_WARNING
+    else:
+        status = STATUS_HEALTHY
+
+    return {
+        "status": status,
+        "message": "load_average",
+        "load_1m": round(load_1m, 2),
+        "load_5m": round(load_5m, 2),
+        "load_15m": round(load_15m, 2),
+        "cpu_count": cpu_count,
+        "load_5m_per_cpu": round(
+            load_per_cpu,
+            2,
+        ),
+    }
+
+
 def get_uptime_seconds() -> float | None:
     proc_uptime = Path("/proc/uptime")
 
@@ -220,16 +495,53 @@ def get_uptime_seconds() -> float | None:
                 ),
                 2,
             )
-        except (OSError, ValueError, IndexError):
+        except (
+            OSError,
+            ValueError,
+            IndexError,
+        ):
             return None
 
     try:
-        return round(time.monotonic(), 2)
+        return round(
+            time.monotonic(),
+            2,
+        )
     except Exception:
         return None
 
 
-def overall_status(checks: dict[str, dict[str, Any]]) -> str:
+def get_boot_time(
+    now: datetime | None = None,
+) -> str | None:
+
+    uptime = get_uptime_seconds()
+
+    if uptime is None:
+        return None
+
+    current = now or utc_now()
+
+    boot_time = (
+        current.astimezone(timezone.utc)
+        - timedelta(seconds=uptime)
+    )
+
+    return boot_time.isoformat()
+
+
+def get_alex_version() -> str | None:
+    try:
+        from alex_version import ALEX_VERSION
+        return str(ALEX_VERSION)
+    except Exception:
+        return None
+
+
+def overall_status(
+    checks: dict[str, dict[str, Any]],
+) -> str:
+
     statuses = {
         item.get("status")
         for item in checks.values()
@@ -241,9 +553,8 @@ def overall_status(checks: dict[str, dict[str, Any]]) -> str:
     if STATUS_WARNING in statuses:
         return STATUS_WARNING
 
-    if STATUS_UNKNOWN in statuses:
-        return STATUS_WARNING
-
+    # Optional metrics being unavailable must not mark
+    # the whole appliance unhealthy.
     return STATUS_HEALTHY
 
 
@@ -258,22 +569,50 @@ def build_health_report(
     current = now or utc_now()
 
     checks = {
-        "database": check_database(database_path),
-        "disk": check_disk(disk_path),
+        "database": check_database(
+            database_path
+        ),
+        "disk": check_disk(
+            disk_path
+        ),
+        "memory": check_memory(),
+        "cpu_temperature": (
+            check_cpu_temperature()
+        ),
+        "load_average": (
+            check_load_average()
+        ),
         "backup": check_backup(
             backup_dir=backup_dir,
             now=current,
         ),
-        "core_service": check_service(service_name),
+        "core_service": check_service(
+            service_name
+        ),
+        "core_runtime": check_core_runtime(
+            service_name
+        ),
     }
 
+    uptime = get_uptime_seconds()
+
     return {
-        "schema_version": 1,
-        "generated_at": current.astimezone(
-            timezone.utc
-        ).isoformat(),
-        "status": overall_status(checks),
-        "uptime_seconds": get_uptime_seconds(),
+        "schema_version": 2,
+        "generated_at": (
+            current
+            .astimezone(timezone.utc)
+            .isoformat()
+        ),
+        "status": overall_status(
+            checks
+        ),
+        "alex_version": (
+            get_alex_version()
+        ),
+        "uptime_seconds": uptime,
+        "boot_time": (
+            get_boot_time(current)
+        ),
         "checks": checks,
     }
 
@@ -283,7 +622,12 @@ def write_report_atomic(
     report: dict[str, Any],
 ) -> None:
 
-    output_path = output_path.expanduser().resolve()
+    output_path = (
+        output_path
+        .expanduser()
+        .resolve()
+    )
+
     output_path.parent.mkdir(
         parents=True,
         exist_ok=True,
@@ -303,12 +647,16 @@ def write_report_atomic(
         encoding="utf-8",
     )
 
-    temporary.replace(output_path)
+    temporary.replace(
+        output_path
+    )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="ALEX health monitor"
+        description=(
+            "ALEX health monitor V2"
+        )
     )
 
     parser.add_argument(
@@ -333,15 +681,24 @@ def main() -> int:
 
     parser.add_argument(
         "--output",
-        default="/var/lib/alex/health/health.json",
+        default=(
+            "/var/lib/alex/health/"
+            "health.json"
+        ),
     )
 
     args = parser.parse_args()
 
     report = build_health_report(
-        database_path=Path(args.database),
-        backup_dir=Path(args.backup_dir),
-        disk_path=Path(args.disk_path),
+        database_path=Path(
+            args.database
+        ),
+        backup_dir=Path(
+            args.backup_dir
+        ),
+        disk_path=Path(
+            args.disk_path
+        ),
         service_name=args.service,
     )
 
@@ -360,7 +717,8 @@ def main() -> int:
 
     return (
         1
-        if report["status"] == STATUS_CRITICAL
+        if report["status"]
+        == STATUS_CRITICAL
         else 0
     )
 
