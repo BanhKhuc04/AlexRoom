@@ -7,6 +7,8 @@ import shutil
 import sqlite3
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -628,6 +630,202 @@ def check_update_state(
     }
 
 
+def parse_iso_datetime(
+    value: str | None,
+) -> datetime | None:
+
+    if not value:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(
+            value.replace(
+                "Z",
+                "+00:00",
+            )
+        )
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(
+            tzinfo=timezone.utc
+        )
+
+    return parsed.astimezone(
+        timezone.utc
+    )
+
+
+def check_hardware_runtime(
+    health_url: str = "http://127.0.0.1:8000/health",
+    now: datetime | None = None,
+    warning_seconds: float = 45.0,
+    critical_seconds: float = 90.0,
+) -> dict[str, Any]:
+
+    current = now or utc_now()
+
+    if current.tzinfo is None:
+        current = current.replace(
+            tzinfo=timezone.utc
+        )
+
+    try:
+        request = urllib.request.Request(
+            health_url,
+            method="GET",
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "alex-health-monitor",
+            },
+        )
+
+        with urllib.request.urlopen(
+            request,
+            timeout=5,
+        ) as response:
+            raw = response.read()
+
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        TimeoutError,
+        OSError,
+    ) as exc:
+        return {
+            "status": STATUS_CRITICAL,
+            "message": "core_health_endpoint_unavailable",
+            "url": health_url,
+            "detail": str(exc),
+        }
+
+    try:
+        document = json.loads(
+            raw.decode("utf-8")
+        )
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ) as exc:
+        return {
+            "status": STATUS_CRITICAL,
+            "message": "core_health_invalid_response",
+            "url": health_url,
+            "detail": str(exc),
+        }
+
+    if not isinstance(document, dict):
+        return {
+            "status": STATUS_CRITICAL,
+            "message": "core_health_invalid_payload",
+            "url": health_url,
+        }
+
+    api_state = str(
+        document.get(
+            "api",
+            "unknown",
+        )
+    ).lower()
+
+    mqtt_state = str(
+        document.get(
+            "mqtt",
+            "unknown",
+        )
+    ).lower()
+
+    device_state = str(
+        document.get(
+            "device",
+            "unknown",
+        )
+    ).lower()
+
+    last_seen_raw = document.get(
+        "last_seen"
+    )
+
+    last_seen = parse_iso_datetime(
+        str(last_seen_raw)
+        if last_seen_raw is not None
+        else None
+    )
+
+    heartbeat_age = None
+
+    if last_seen is not None:
+        heartbeat_age = max(
+            0.0,
+            (
+                current.astimezone(
+                    timezone.utc
+                )
+                - last_seen
+            ).total_seconds(),
+        )
+
+    status = STATUS_HEALTHY
+    message = "hardware_runtime_ok"
+
+    if api_state != "online":
+        status = STATUS_CRITICAL
+        message = "api_runtime_not_online"
+
+    elif mqtt_state != "connected":
+        status = STATUS_CRITICAL
+        message = "mqtt_disconnected"
+
+    elif device_state == "offline":
+        status = STATUS_CRITICAL
+        message = "device_offline"
+
+    elif device_state == "degraded":
+        status = STATUS_WARNING
+        message = "device_degraded"
+
+    elif device_state != "online":
+        status = STATUS_WARNING
+        message = "device_state_unknown"
+
+    elif heartbeat_age is None:
+        status = STATUS_WARNING
+        message = "heartbeat_timestamp_missing"
+
+    elif heartbeat_age >= critical_seconds:
+        status = STATUS_CRITICAL
+        message = "heartbeat_stale"
+
+    elif heartbeat_age >= warning_seconds:
+        status = STATUS_WARNING
+        message = "heartbeat_delayed"
+
+    return {
+        "status": status,
+        "message": message,
+        "url": health_url,
+        "api": api_state,
+        "mqtt": mqtt_state,
+        "device": device_state,
+        "last_seen": (
+            last_seen.isoformat()
+            if last_seen
+            else last_seen_raw
+        ),
+        "heartbeat_age_seconds": (
+            round(
+                heartbeat_age,
+                2,
+            )
+            if heartbeat_age is not None
+            else None
+        ),
+        "heartbeat_warning_seconds": warning_seconds,
+        "heartbeat_critical_seconds": critical_seconds,
+    }
+
+
 def get_uptime_seconds() -> float | None:
     proc_uptime = Path("/proc/uptime")
 
@@ -744,12 +942,15 @@ def build_health_report(
         "update": check_update_state(
             "alex-update.service"
         ),
+        "hardware_runtime": check_hardware_runtime(
+            now=current
+        ),
     }
 
     uptime = get_uptime_seconds()
 
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "generated_at": (
             current
             .astimezone(timezone.utc)
