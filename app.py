@@ -35,6 +35,7 @@ from alex_brain import BrainService
 from alex_safety import CapabilityRegistry, CommandGateway, GatewayResult, SafetyDecision, SafetyPolicy
 from alex_ota import AlexOtaService
 from alex_version import ALEX_VERSION
+from alex_health_api import read_health_snapshot
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -47,6 +48,17 @@ ALEX_BACKUP_DIR = Path(os.getenv(
     "ALEX_BACKUP_DIR",
     str(DATABASE_PATH.parent / "backups"),
 ))
+ALEX_HEALTH_REPORT_PATH = Path(
+    os.getenv(
+        "ALEX_HEALTH_REPORT_PATH",
+        str(
+            DATABASE_PATH.parent
+            / "health"
+            / "health.json"
+        ),
+    )
+)
+
 ALEX_BACKUP_RETENTION = int(os.getenv(
     "ALEX_BACKUP_RETENTION",
     "7",
@@ -660,6 +672,13 @@ def system_metrics() -> dict[str, Any]:
         "temperature_c": temperature,
         "tailscale_ip": tailscale_ip,
     }
+
+
+@app.get("/api/system/health")
+def system_health() -> dict[str, Any]:
+    return read_health_snapshot(
+        ALEX_HEALTH_REPORT_PATH
+    )
 
 
 @app.get("/api/events")
