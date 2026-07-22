@@ -176,6 +176,41 @@ export function renderLogs(state) {
 </article>`;
 }
 
+/** @param {{payload: import("../core/domain").BrainStatus | null, loading: boolean, error: string | null, wakeInFlight: boolean, onRefresh: () => void, onWake: () => void} | null} state */
+export function renderBrain(state) {
+  if (state?.loading && !state?.payload) {
+    return `<article class="workspace-panel"><h2>Compute Node</h2><p>Đang tải thông tin từ backend...</p></article>`;
+  }
+  if (state?.error && !state?.payload) {
+    return `<article class="workspace-panel"><h2>Compute Node</h2><p class="error">${escapeHtml(state.error)}</p><div class="relay-actions"><button type="button" data-refresh-brain>THỬ LẠI</button></div></article>`;
+  }
+
+  const payload = state?.payload;
+  if (!payload) return `<article class="workspace-panel"><h2>Compute Node</h2><p>Chưa có dữ liệu.</p></article>`;
+
+  const stateCls = payload.state === "online" ? "success" : payload.state === "degraded" ? "warning" : payload.state === "waking" ? "info" : "error";
+  const canWake = payload.state === "offline" || payload.state === "degraded";
+
+  return `<article class="workspace-panel">
+<h2>Compute Node</h2>
+<p>ALEX Brain Wake-on-LAN Controller.</p>
+<dl class="integration-list">
+  <div><dt>STATE</dt><dd class="${stateCls}">${escapeHtml(String(payload.state).toUpperCase())}</dd></div>
+  <div><dt>HOST</dt><dd>${escapeHtml(payload.host ?? "Chưa cấu hình")}</dd></div>
+  <div><dt>HOST CONFIGURATION</dt><dd>${payload.host ? "CONFIGURED" : "NOT CONFIGURED"}</dd></div>
+  <div><dt>HARDWARE VERIFIED</dt><dd>${payload.hardware_verified ? "YES" : "NO"}</dd></div>
+  ${payload.requested_at ? `<div><dt>REQUESTED AT</dt><dd>${formatTime(payload.requested_at)}</dd></div>` : ""}
+  ${payload.confirmed_at ? `<div><dt>CONFIRMED AT</dt><dd>${formatTime(payload.confirmed_at)}</dd></div>` : ""}
+  ${payload.failure_reason ? `<div><dt>FAILURE REASON</dt><dd class="error">${escapeHtml(String(payload.failure_reason))}</dd></div>` : ""}
+</dl>
+<div class="relay-actions" style="margin-top: 1rem;">
+  <button type="button" data-wake-brain ${canWake && !state?.wakeInFlight && payload.host ? "" : "disabled"}>${state?.wakeInFlight || payload.state === "waking" ? "WAKING..." : "WAKE BRAIN"}</button>
+  <button type="button" class="secondary-action" data-refresh-brain>LÀM MỚI</button>
+</div>
+${state?.error ? `<p class="error" style="margin-top: 1rem;">${escapeHtml(state.error)}</p>` : ""}
+</article>`;
+}
+
 /** @param {SystemSnapshot | null} snapshot */
 function renderSystem(snapshot) {
   const system = snapshot?.system ?? null;
@@ -412,7 +447,6 @@ function renderFoundation(workspace) {
     security: ["ALEX Guard", "UNKNOWN", "Chưa có cảm biến cửa/camera thật; vì vậy hệ thống không thể tuyên bố phòng đang an toàn.", "KIỂM TRA HỆ THỐNG"],
     cameras: ["Vision channels", "0 source", "Chưa cấu hình camera, RTSP/WebRTC hoặc chính sách riêng tư.", "THÊM CẤU HÌNH"],
     energy: ["Energy telemetry", "NO METER", "Không có meter/endpoint điện năng; biểu đồ giả và số kWh mẫu bị cấm.", "KẾT NỐI METER"],
-    brain: ["ALEX Brain", "NOT CONNECTED", "Chưa có heartbeat hoặc Wake-on-LAN endpoint cho PC i5-4590.", "CẤU HÌNH WOL"],
   }[workspace] ?? ["Workspace", "EMPTY", "Không có dữ liệu cho workspace này.", "CHƯA KHẢ DỤNG"];
 
   return `<div class="overview-grid feature-empty"><article class="workspace-panel"><span class="panel-caption-inline">${details[1]}</span><h2>${details[0]}</h2><p>${details[2]}</p><div class="phase-notice"><b>HONEST STATE</b><span>UI chỉ hiển thị dữ liệu có nguồn. Tính năng cần backend/hardware được khóa thay vì báo thành công mô phỏng.</span></div><button class="secondary-action" type="button" disabled>${details[3]}</button></article><article class="workspace-panel"><h2>Trạng thái tích hợp</h2><dl class="integration-list"><div><dt>LOCAL UI</dt><dd>READY</dd></div><div><dt>BACKEND CONTRACT</dt><dd>PENDING</dd></div><div><dt>HARDWARE</dt><dd>NOT VERIFIED</dd></div></dl></article></div>`;
@@ -429,7 +463,8 @@ function renderScenes(snapshot) {
  * @param {HTMLElement} container
  * @param {string} workspace
  * @param {SystemSnapshot | null} snapshot
- * @param {{onRelay: (id: number, action: "ON" | "OFF") => void, onTestLed: (value: boolean) => void, onMode: (mode: import("../core/domain").RoomMode) => void, onSettings: () => void, onOta?: (version: string) => void, auditState?: any}} actions
+ * @param {{onRelay: (id: number, action: "ON" | "OFF") => void, onTestLed: (value: boolean) => void, onMode: (mode: import("../core/domain").RoomMode) => void, onSettings: () => void, onOta?: (version: string) => void, auditState?: any, brainState?: any}} actions
+
  */
 export function renderWorkspace(container, workspace, snapshot, actions) {
   if (workspace === "overview") container.innerHTML = renderOverview(snapshot);
@@ -441,7 +476,17 @@ export function renderWorkspace(container, workspace, snapshot, actions) {
       refreshBtn.addEventListener("click", () => actions.auditState.onRefresh());
     }
   }
-
+  else if (workspace === "brain") {
+    container.innerHTML = renderBrain(actions.brainState);
+    const refreshBtn = container.querySelector("[data-refresh-brain]");
+    const wakeBtn = container.querySelector("[data-wake-brain]");
+    if (refreshBtn && actions.brainState?.onRefresh) {
+      refreshBtn.addEventListener("click", () => actions.brainState.onRefresh());
+    }
+    if (wakeBtn && actions.brainState?.onWake) {
+      wakeBtn.addEventListener("click", () => actions.brainState.onWake());
+    }
+  }
   else if (workspace === "system") container.innerHTML = renderSystem(snapshot);
   else if (workspace === "scenes") container.innerHTML = renderScenes(snapshot);
   else if (workspace === "settings") container.innerHTML = `<article class="workspace-panel"><h2>Experience settings</h2><p>Điều chỉnh performance/balanced/cinematic, reduced motion và sound modes/gain groups.</p><button class="primary-action" type="button" data-open-experience>MỞ CÀI ĐẶT</button></article>`;

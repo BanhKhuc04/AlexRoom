@@ -81,6 +81,18 @@ export interface AuditPayload {
   source: string;
 }
 
+export type BrainState = "offline" | "waking" | "online" | "degraded";
+
+export interface BrainStatus {
+  state: BrainState;
+  requested_at: string | null;
+  confirmed_at: string | null;
+  failure_reason: string | null;
+  host: string | null;
+  hardware_verified: boolean;
+}
+
+
 export interface OtaState {
   operation_id: string;
   target_version: string;

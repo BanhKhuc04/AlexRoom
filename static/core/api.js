@@ -153,4 +153,20 @@ export class AlexApi {
       : 80;
     return /** @type {Promise<import("./domain").AuditPayload>} */ (this.request(`/api/v1/audit?limit=${boundedLimit}`));
   }
+
+  /**
+   * Fetch current ALEX Brain compute node status.
+   * @returns {Promise<import("./domain").BrainStatus>}
+   */
+  async getBrain() {
+    return /** @type {Promise<import("./domain").BrainStatus>} */ (this.request("/api/v1/brain"));
+  }
+
+  /**
+   * Request Wake-on-LAN packet to wake ALEX Brain.
+   * @returns {Promise<import("./domain").BrainStatus>}
+   */
+  async wakeBrain() {
+    return /** @type {Promise<import("./domain").BrainStatus>} */ (this.request("/api/v1/brain/wake", { method: "POST" }));
+  }
 }

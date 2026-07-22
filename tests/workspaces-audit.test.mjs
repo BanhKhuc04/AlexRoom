@@ -74,7 +74,7 @@ test("renderLogs outputs error state", () => {
 
 test("cached audit refetch behavior (source analysis)", async () => {
   const appSource = await readFile(new URL("../static/app.js", import.meta.url), "utf8");
-  assert.match(appSource, /if \(!force && auditPayload\) return;/);
+  assert.match(appSource, /if \(!force && \(auditPayload \|\| auditError\)\) return;/);
   assert.match(appSource, /if \(auditLoading\) return;/);
   assert.match(appSource, /onRefresh:\s*\(\)\s*=>\s*loadAudit\(true\)/);
 });

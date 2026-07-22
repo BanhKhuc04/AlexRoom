@@ -143,6 +143,7 @@ function setWorkspace(workspace) {
   elements.commandNav.querySelectorAll("button[data-workspace]").forEach((button) => {
     button.classList.toggle("active", button instanceof HTMLButtonElement && button.dataset.workspace === workspace);
   });
+  if (workspace !== "brain") cancelBrainPolling();
   renderActiveWorkspace();
 }
 
@@ -154,7 +155,7 @@ let auditError = null;
 
 function loadAudit(force = false) {
   if (auditLoading) return;
-  if (!force && auditPayload) return;
+  if (!force && (auditPayload || auditError)) return;
   auditLoading = true;
   auditError = null;
   renderActiveWorkspace();
@@ -169,6 +170,86 @@ function loadAudit(force = false) {
   });
 }
 
+/** @type {import("./core/domain").BrainStatus | null} */
+let brainPayload = null;
+let brainLoading = false;
+/** @type {string | null} */
+let brainError = null;
+let brainWakeInFlight = false;
+/** @type {number | NodeJS.Timeout | null} */
+let brainWakePollTimer = null;
+const BRAIN_WAKE_POLL_INTERVAL_MS = 2000;
+const BRAIN_WAKE_MAX_POLLS = 23;
+let brainWakePollCount = 0;
+
+function cancelBrainPolling() {
+  if (brainWakePollTimer) {
+    clearTimeout(/** @type {number} */(/** @type {unknown} */ (brainWakePollTimer)));
+    brainWakePollTimer = null;
+  }
+  brainWakePollCount = 0;
+}
+
+window.addEventListener("beforeunload", cancelBrainPolling);
+
+function scheduleBrainPoll() {
+  if (!brainWakePollTimer && brainWakePollCount < BRAIN_WAKE_MAX_POLLS) {
+    brainWakePollTimer = setTimeout(() => {
+      brainWakePollTimer = null;
+      brainWakePollCount += 1;
+      loadBrain(true);
+    }, BRAIN_WAKE_POLL_INTERVAL_MS);
+  } else if (brainWakePollCount >= BRAIN_WAKE_MAX_POLLS) {
+    if (brainPayload && brainPayload.state === "waking") {
+      brainError = "Wake confirmation timed out. Vui lòng thử lại.";
+      renderActiveWorkspace();
+    }
+    cancelBrainPolling();
+  }
+}
+
+function loadBrain(force = false) {
+  if (brainLoading) return;
+  if (!force && (brainPayload || brainError)) return;
+  brainLoading = true;
+  if (force) brainError = null;
+  renderActiveWorkspace();
+  api.getBrain().then((payload) => {
+    brainPayload = payload;
+    if (payload.state === "waking") {
+      scheduleBrainPoll();
+    } else {
+      cancelBrainPolling();
+    }
+  }).catch((error) => {
+    console.error("Brain load failed", error);
+    brainError = "Lỗi khi kết nối backend.";
+  }).finally(() => {
+    brainLoading = false;
+    renderActiveWorkspace();
+  });
+}
+
+function executeWakeBrain() {
+  if (brainWakeInFlight) return;
+  brainWakeInFlight = true;
+  brainError = null;
+  renderActiveWorkspace();
+  api.wakeBrain().then((payload) => {
+    brainPayload = payload;
+    brainWakePollCount = 0;
+    if (payload.state === "waking") {
+      scheduleBrainPoll();
+    }
+  }).catch((error) => {
+    console.error("Brain wake failed", error);
+    brainError = "Lỗi yêu cầu đánh thức. Vui lòng thử lại.";
+  }).finally(() => {
+    brainWakeInFlight = false;
+    renderActiveWorkspace();
+  });
+}
+
 function renderActiveWorkspace() {
   const metadata = WORKSPACES[activeWorkspace];
   elements.workspaceEyebrow.textContent = metadata.eyebrow;
@@ -176,6 +257,8 @@ function renderActiveWorkspace() {
   elements.workspaceDescription.textContent = metadata.description;
   if (activeWorkspace === "logs") {
     loadAudit();
+  } else if (activeWorkspace === "brain") {
+    loadBrain();
   }
   renderWorkspace(elements.workspaceContent, activeWorkspace, snapshot, {
     onRelay: (id, action) => { void executeRelayCommand(id, action); },
@@ -188,6 +271,14 @@ function renderActiveWorkspace() {
       loading: auditLoading,
       error: auditError,
       onRefresh: () => loadAudit(true)
+    },
+    brainState: {
+      payload: brainPayload,
+      loading: brainLoading,
+      error: brainError,
+      wakeInFlight: brainWakeInFlight,
+      onRefresh: () => loadBrain(true),
+      onWake: () => executeWakeBrain()
     }
   });
 }
