@@ -1,0 +1,11 @@
+[Unit]
+Description=ALEX Core local API watchdog
+After=alex-core.service network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/alex/AlexRoom-0.2.0-hardware-rc
+
+ExecStart=/opt/alex/AlexRoom-0.2.0-hardware-rc/.venv/bin/python /opt/alex/AlexRoom-0.2.0-hardware-rc/alex_watchdog.py --health-url http://127.0.0.1:8000/health --service alex-core.service --state /var/lib/alex/watchdog/state.json --threshold 3 --cooldown 120 --timeout 3
+
+Nice=10
