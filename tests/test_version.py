@@ -1,9 +1,18 @@
-import unittest
 import json
+import os
+import unittest
 from pathlib import Path
 
 
-from app import app
+os.environ.setdefault("MQTT_PASSWORD", "unit-test-password")
+os.environ.setdefault("ALEX_API_KEY", "unit-test-api-key")
+os.environ.setdefault("ALEX_SIMULATOR", "0")
+os.environ.setdefault(
+    "ALEX_DATABASE_PATH",
+    "data/unit-test-version.db",
+)
+
+from app import app  # noqa: E402
 from alex_version import ALEX_VERSION, _load_version
 from alex_store import SCHEMA_VERSION
 from alex_hardware import PROTOCOL_VERSION
@@ -14,12 +23,15 @@ class TestVersionFoundation(unittest.TestCase):
     def test_1_version_exists(self):
         self.assertTrue((BASE_DIR / "VERSION").exists())
 
-    def test_2_version_resolves_to_0_3_0(self):
-        content = (BASE_DIR / "VERSION").read_text("utf-8").strip()
-        self.assertEqual(content, "0.3.0")
+    def test_2_version_file_contains_valid_semver(self):
+        from alex_version import SEMVER_REGEX
 
-    def test_3_alex_version_equals_0_3_0(self):
-        self.assertEqual(ALEX_VERSION, "0.3.0")
+        content = (BASE_DIR / "VERSION").read_text("utf-8").strip()
+        self.assertIsNotNone(SEMVER_REGEX.fullmatch(content))
+
+    def test_3_alex_version_equals_version_file(self):
+        content = (BASE_DIR / "VERSION").read_text("utf-8").strip()
+        self.assertEqual(ALEX_VERSION, content)
 
     def test_4_semantic_version_validation_works(self):
         from alex_version import SEMVER_REGEX
