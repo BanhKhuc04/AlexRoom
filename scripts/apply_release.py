@@ -105,17 +105,32 @@ def build_release_files(
     if CHANGELOG_FILE.exists():
         existing_changelog = CHANGELOG_FILE.read_text(
             encoding="utf-8"
-        ).lstrip("\ufeff")
+        ).lstrip("\ufeff").lstrip()
+
+        header = "# Changelog"
+
+        if existing_changelog.startswith(header):
+            existing_body = existing_changelog[
+                len(header):
+            ].lstrip()
+        else:
+            existing_body = existing_changelog
 
         changelog = (
-            release_notes.rstrip()
+            header
             + "\n\n"
-            + existing_changelog.lstrip()
+            + release_notes.rstrip()
         )
+
+        if existing_body:
+            changelog += (
+                "\n\n"
+                + existing_body
+            )
     else:
         changelog = (
             "# Changelog\n\n"
-            + release_notes
+            + release_notes.rstrip()
         )
 
     return {

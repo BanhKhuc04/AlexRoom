@@ -153,6 +153,69 @@ class TestApplyRelease(unittest.TestCase):
             )
             self.assertIn("Previous release.", changelog)
 
+    def test_changelog_header_remains_at_top(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            version_file = root / "VERSION"
+            package_file = root / "package.json"
+            lock_file = root / "package-lock.json"
+            changelog_file = root / "CHANGELOG.md"
+
+            package_file.write_text(
+                '{"version":"0.3.0"}',
+                encoding="utf-8",
+            )
+
+            lock_file.write_text(
+                '{"version":"0.3.0","packages":{"":{"version":"0.3.0"}}}',
+                encoding="utf-8",
+            )
+
+            changelog_file.write_text(
+                "# Changelog\n\n"
+                "# ALEX v0.3.0\n\n"
+                "Previous release.\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(
+                apply_release,
+                "VERSION_FILE",
+                version_file,
+            ), patch.object(
+                apply_release,
+                "PACKAGE_FILE",
+                package_file,
+            ), patch.object(
+                apply_release,
+                "PACKAGE_LOCK_FILE",
+                lock_file,
+            ), patch.object(
+                apply_release,
+                "CHANGELOG_FILE",
+                changelog_file,
+            ):
+                files = apply_release.build_release_files(
+                    self.make_result()
+                )
+
+            changelog = files[changelog_file]
+
+            self.assertTrue(
+                changelog.startswith(
+                    "# Changelog\n\n# ALEX v0.4.0"
+                )
+            )
+            self.assertEqual(
+                changelog.count("# Changelog"),
+                1,
+            )
+            self.assertLess(
+                changelog.index("# ALEX v0.4.0"),
+                changelog.index("# ALEX v0.3.0"),
+            )
+
     def test_dirty_working_tree_is_rejected(self):
         with patch.object(
             apply_release,

@@ -1,5 +1,15 @@
 # Changelog
 
+# ALEX v0.5.0
+
+Previous version: 0.4.0
+Commits included: 2
+
+## Features
+
+- feat: add release notes extraction (`9ffe888`)
+- feat: add manual release workflow (`e4150a3`)
+
 # ALEX v0.4.0
 
 Previous version: 0.3.0
