@@ -482,6 +482,152 @@ def check_load_average() -> dict[str, Any]:
     }
 
 
+def check_timer(
+    timer_name: str,
+) -> dict[str, Any]:
+
+    active_state = systemctl_property(
+        timer_name,
+        "ActiveState",
+    )
+
+    sub_state = systemctl_property(
+        timer_name,
+        "SubState",
+    )
+
+    next_trigger = systemctl_property(
+        timer_name,
+        "NextElapseUSecRealtime",
+    )
+
+    last_trigger = systemctl_property(
+        timer_name,
+        "LastTriggerUSec",
+    )
+
+    if active_state is None:
+        return {
+            "status": STATUS_UNKNOWN,
+            "message": "timer_state_unavailable",
+            "timer": timer_name,
+        }
+
+    if (
+        active_state == "active"
+        and sub_state in {
+            "waiting",
+            "running",
+            "elapsed",
+        }
+    ):
+        status = STATUS_HEALTHY
+    else:
+        status = STATUS_CRITICAL
+
+    return {
+        "status": status,
+        "message": "timer_state",
+        "timer": timer_name,
+        "active_state": active_state,
+        "sub_state": sub_state,
+        "next_trigger": next_trigger,
+        "last_trigger": last_trigger,
+    }
+
+
+def check_update_state(
+    service_name: str = "alex-update.service",
+) -> dict[str, Any]:
+
+    result = systemctl_property(
+        service_name,
+        "Result",
+    )
+
+    exec_status_raw = systemctl_property(
+        service_name,
+        "ExecMainStatus",
+    )
+
+    active_state = systemctl_property(
+        service_name,
+        "ActiveState",
+    )
+
+    sub_state = systemctl_property(
+        service_name,
+        "SubState",
+    )
+
+    exit_timestamp = systemctl_property(
+        service_name,
+        "ExecMainExitTimestamp",
+    )
+
+    state_timestamp = systemctl_property(
+        service_name,
+        "StateChangeTimestamp",
+    )
+
+    try:
+        exec_status = (
+            int(exec_status_raw)
+            if exec_status_raw is not None
+            else None
+        )
+    except ValueError:
+        exec_status = None
+
+    if (
+        result is None
+        and exec_status is None
+        and active_state is None
+    ):
+        status = STATUS_UNKNOWN
+        message = "update_state_unavailable"
+
+    elif (
+        result in {
+            "failed",
+            "exit-code",
+            "signal",
+            "core-dump",
+            "timeout",
+            "watchdog",
+            "resources",
+        }
+        or (
+            exec_status is not None
+            and exec_status != 0
+        )
+    ):
+        status = STATUS_CRITICAL
+        message = "last_update_failed"
+
+    else:
+        status = STATUS_HEALTHY
+
+        if active_state == "active":
+            message = "update_running"
+        elif result == "success":
+            message = "last_update_success"
+        else:
+            message = "update_idle"
+
+    return {
+        "status": status,
+        "message": message,
+        "service": service_name,
+        "result": result,
+        "exec_status": exec_status,
+        "active_state": active_state,
+        "sub_state": sub_state,
+        "last_exit": exit_timestamp,
+        "state_changed": state_timestamp,
+    }
+
+
 def get_uptime_seconds() -> float | None:
     proc_uptime = Path("/proc/uptime")
 
@@ -592,12 +738,18 @@ def build_health_report(
         "core_runtime": check_core_runtime(
             service_name
         ),
+        "update_timer": check_timer(
+            "alex-update.timer"
+        ),
+        "update": check_update_state(
+            "alex-update.service"
+        ),
     }
 
     uptime = get_uptime_seconds()
 
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "generated_at": (
             current
             .astimezone(timezone.utc)
