@@ -17,7 +17,8 @@ SEMVER_PATTERN = re.compile(
 )
 
 RELEASE_HEADING_PATTERN = re.compile(
-    r"^# ALEX v(?P<version>[^\s]+)\s*$",
+    r"^# ALEX(?: NEXUS OS)? v(?P<version>[^\s]+)"
+    r"(?:\s+—\s+\S.*)?\s*$",
     re.MULTILINE,
 )
 

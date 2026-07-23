@@ -67,6 +67,84 @@ Previous version: 0.3.0
         )
         self.assertNotIn("# ALEX v0.5.0", notes)
 
+    def test_extract_expanded_release_heading(self):
+        changelog = """# Changelog
+
+# ALEX NEXUS OS v0.8.0 — Brain Text Intelligence
+
+## Summary
+
+- structured Brain proposals
+
+# ALEX v0.7.0
+
+- previous release
+"""
+
+        notes = extract_release_notes.extract_release_notes(
+            changelog,
+            "0.8.0",
+        )
+
+        self.assertTrue(
+            notes.startswith(
+                "# ALEX NEXUS OS v0.8.0 — Brain Text Intelligence"
+            )
+        )
+        self.assertIn("structured Brain proposals", notes)
+        self.assertNotIn("# ALEX v0.7.0", notes)
+        self.assertNotIn("previous release", notes)
+
+    def test_mixed_headings_preserve_section_boundaries(self):
+        changelog = """# Changelog
+
+# ALEX NEXUS OS v0.9.0 — Future
+
+- future release
+
+# ALEX NEXUS OS v0.8.0 — Brain Text Intelligence
+
+- target release
+
+# ALEX v0.7.0
+
+- previous release
+"""
+
+        notes = extract_release_notes.extract_release_notes(
+            changelog,
+            "0.8.0",
+        )
+
+        self.assertIn("target release", notes)
+        self.assertNotIn("future release", notes)
+        self.assertNotIn("previous release", notes)
+
+    def test_similar_versions_match_exactly(self):
+        changelog = """# Changelog
+
+# ALEX NEXUS OS v0.8.1 — Patch
+
+- patch release
+
+# ALEX NEXUS OS v0.8.0 — Brain Text Intelligence
+
+- exact release
+
+# ALEX v0.7.0
+
+- previous release
+"""
+
+        notes = extract_release_notes.extract_release_notes(
+            changelog,
+            "0.8.0",
+        )
+
+        self.assertIn("exact release", notes)
+        self.assertNotIn("patch release", notes)
+        self.assertNotIn("previous release", notes)
+
     def test_missing_release_is_rejected(self):
         with self.assertRaisesRegex(
             ValueError,
