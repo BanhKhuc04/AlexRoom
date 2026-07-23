@@ -67,6 +67,147 @@ export interface EventItem {
   details: Record<string, unknown> | null;
 }
 
+export interface AuditRecord {
+  created_at: string;
+  kind: string;
+  level: string;
+  message: string;
+  source: string;
+  details: Record<string, unknown> | null;
+}
+
+export interface AuditPayload {
+  items: AuditRecord[];
+  source: string;
+}
+
+export type BrainState = "offline" | "waking" | "online" | "degraded";
+
+export interface BrainStatus {
+  state: BrainState;
+  requested_at: string | null;
+  confirmed_at: string | null;
+  failure_reason: string | null;
+  host: string | null;
+  hardware_verified: boolean;
+}
+
+export type AutomationTrigger =
+  | { type: "manual" }
+  | { type: "time"; at: string }
+  | { type: "device_state" }
+  | { type: "heartbeat_offline" };
+
+/** Trigger types supported by the create/edit UI in Phase 0.7.3. */
+export type EditableTriggerType = "manual" | "time";
+
+export type AutomationCondition =
+  | { type: "node_connection"; equals: string }
+  | { type: "reported_state"; target: string; field: string; equals: JsonValue };
+
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+export interface AutomationAction {
+  node_id?: string;
+  target: string;
+  action: string;
+  value?: JsonValue;
+}
+
+export type AutomationBlockedReason =
+  | "rule_disabled"
+  | "trigger_not_matched"
+  | "conditions_not_met"
+  | "safety_policy_denied"
+  | null;
+
+export type MissionRunStatus = "running" | "completed" | "partial" | "failed";
+export type MissionStepStatus = "running" | "waiting_ack" | "confirmed" | "failed";
+
+export interface SafetyDecision {
+  allowed: boolean;
+  reason: string | null;
+  node_id: string;
+  capability_id: string;
+  action: string;
+  risk_level: string;
+  verification_status: string;
+  node_hardware_verified: boolean;
+  execution_mode: string;
+}
+
+export interface MissionStepDefinition {
+  node_id?: string;
+  target: string;
+  action: string;
+  value?: JsonValue;
+  payload?: Record<string, JsonValue>;
+}
+
+export interface MissionDefinition {
+  name: string;
+  source?: string;
+  steps: MissionStepDefinition[];
+}
+
+export interface MissionRecord extends MissionDefinition {
+  id: string;
+  updated_at?: string;
+}
+
+export interface MissionStepResult {
+  index: number;
+  target: string;
+  action: string;
+  status: MissionStepStatus;
+  command_id: string | null;
+  failure_reason: string | null;
+  safety_decision: SafetyDecision | null;
+  started_at: string;
+  completed_at: string | null;
+}
+
+export interface MissionRun {
+  mission_id: string;
+  name: string;
+  status: MissionRunStatus;
+  started_at: string;
+  completed_at: string | null;
+  steps: MissionStepResult[];
+  source: string;
+}
+
+export interface MissionRunRecord extends MissionRun {
+  id: string;
+  updated_at?: string;
+}
+
+export interface AutomationDefinition {
+  name: string;
+  enabled: boolean;
+  trigger: AutomationTrigger;
+  conditions: AutomationCondition[];
+  actions: AutomationAction[];
+  source?: string;
+}
+
+export interface AutomationRecord extends AutomationDefinition {
+  id: string;
+  updated_at?: string;
+  lastEvaluation?: string;
+  lastRun?: string;
+  blockedReason?: AutomationBlockedReason;
+  result?: MissionRunStatus;
+  duration?: number;
+}
+
+export interface AutomationRunResult {
+  matched: boolean;
+  blocked_reason: AutomationBlockedReason;
+  mission: MissionRun | null;
+  evaluation: AutomationRecord;
+}
+
 export interface OtaState {
   operation_id: string;
   target_version: string;
@@ -134,4 +275,41 @@ export interface V1Command {
     node: Omit<NodeVerification, "capabilities">;
     capability: CapabilityStatus | null;
   };
+}
+
+// --- Backup State ---
+export interface BackupRecord {
+  file: string;
+  metadata_file: string;
+  size_bytes: number;
+  sha256: string;
+  integrity: string;
+  created_at?: string;
+  source_database?: string;
+}
+
+export interface BackupHistoryPayload {
+  items: BackupRecord[];
+  retention: number;
+  directory: string;
+}
+
+// --- Scene State ---
+export interface SceneStepDefinition {
+  node_id?: string;
+  target: string;
+  action: string;
+  value?: JsonValue;
+  payload?: Record<string, JsonValue>;
+}
+
+export interface SceneDefinition {
+  name: string;
+  source?: string;
+  steps?: SceneStepDefinition[];
+}
+
+export interface SceneRecord extends SceneDefinition {
+  id: string;
+  updated_at?: string;
 }

@@ -140,4 +140,141 @@ export class AlexApi {
       body: JSON.stringify({ version: targetVersion }),
     });
   }
+
+  /**
+   * Fetch persistent audit records from SQLite.
+   * @param {number|string|undefined} [limit]
+   * @returns {Promise<import("./domain").AuditPayload>}
+   */
+  async getAudit(limit) {
+    const numericLimit = Number(limit);
+    const boundedLimit = Number.isFinite(numericLimit)
+      ? Math.max(1, Math.min(200, Math.trunc(numericLimit)))
+      : 80;
+    return /** @type {Promise<import("./domain").AuditPayload>} */ (this.request(`/api/v1/audit?limit=${boundedLimit}`));
+  }
+
+  /**
+   * Fetch current ALEX Brain compute node status.
+   * @returns {Promise<import("./domain").BrainStatus>}
+   */
+  async getBrain() {
+    return /** @type {Promise<import("./domain").BrainStatus>} */ (this.request("/api/v1/brain"));
+  }
+
+  /**
+   * Request Wake-on-LAN packet to wake ALEX Brain.
+   * @returns {Promise<import("./domain").BrainStatus>}
+   */
+  async wakeBrain() {
+    return /** @type {Promise<import("./domain").BrainStatus>} */ (this.request("/api/v1/brain/wake", { method: "POST" }));
+  }
+
+  /**
+   * @returns {Promise<{items: import("./domain").AutomationRecord[], source: string}>}
+   */
+  async getAutomations() {
+    return /** @type {Promise<{items: import("./domain").AutomationRecord[], source: string}>} */ (this.request("/api/v1/automations"));
+  }
+
+  /**
+   * @param {string} id
+   * @param {import("./domain").AutomationDefinition} definition
+   * @returns {Promise<{saved: boolean, domain: string, id: string, source: string}>}
+   */
+  async saveAutomation(id, definition) {
+    return /** @type {Promise<{saved: boolean, domain: string, id: string, source: string}>} */ (this.request(`/api/v1/automations/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: definition })
+    }));
+  }
+
+  /**
+   * @param {string} id
+   * @returns {Promise<import("./domain").AutomationRunResult>}
+   */
+  async runAutomation(id) {
+    return /** @type {Promise<import("./domain").AutomationRunResult>} */ (this.request(`/api/v1/automations/${encodeURIComponent(id)}/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "manual" })
+    }));
+  }
+
+  /**
+   * @returns {Promise<{items: import("./domain").MissionRecord[], source: string}>}
+   */
+  async getMissions() {
+    return /** @type {Promise<{items: import("./domain").MissionRecord[], source: string}>} */ (this.request("/api/v1/missions"));
+  }
+
+  /**
+   * @returns {Promise<{items: import("./domain").MissionRunRecord[], source: string}>}
+   */
+  async getMissionRuns() {
+    return /** @type {Promise<{items: import("./domain").MissionRunRecord[], source: string}>} */ (this.request("/api/v1/mission_runs"));
+  }
+
+
+  /**
+   * @param {string} id
+   * @param {import("./domain").MissionDefinition} definition
+   * @returns {Promise<{saved: boolean, domain: string, id: string, source: string}>}
+   */
+  async saveMission(id, definition) {
+    return /** @type {Promise<{saved: boolean, domain: string, id: string, source: string}>} */ (this.request(`/api/v1/missions/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: definition })
+    }));
+  }
+
+  /**
+   * @param {string} id
+   * @returns {Promise<import("./domain").MissionRun>}
+   */
+  async runMission(id) {
+    return /** @type {Promise<import("./domain").MissionRun>} */ (this.request(`/api/v1/missions/${encodeURIComponent(id)}/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    }));
+  }
+
+  /**
+   * @returns {Promise<import("./domain").BackupHistoryPayload>}
+   */
+  async getBackups() {
+    return /** @type {Promise<import("./domain").BackupHistoryPayload>} */ (this.request("/api/v1/backups"));
+  }
+
+  /**
+   * @returns {Promise<{backup: import("./domain").BackupRecord}>}
+   */
+  async createBackup() {
+    return /** @type {Promise<{backup: import("./domain").BackupRecord}>} */ (this.request("/api/v1/backup", {
+      method: "POST"
+    }));
+  }
+
+  /**
+   * @returns {Promise<{items: import("./domain").SceneRecord[], source: string}>}
+   */
+  async getScenes() {
+    return /** @type {Promise<{items: import("./domain").SceneRecord[], source: string}>} */ (this.request("/api/v1/scenes"));
+  }
+
+  /**
+   * @param {string} id
+   * @param {import("./domain").SceneDefinition} definition
+   * @returns {Promise<{saved: boolean, domain: string, id: string, source: string}>}
+   */
+  async saveScene(id, definition) {
+    return /** @type {Promise<{saved: boolean, domain: string, id: string, source: string}>} */ (this.request(`/api/v1/scenes/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: definition })
+    }));
+  }
 }

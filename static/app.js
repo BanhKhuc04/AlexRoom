@@ -4,6 +4,7 @@ import { createDeviceCommand, transitionCommand } from "./core/command-lifecycle
 import { createMotionProfile, normalizeQualityMode } from "./core/quality.js";
 import { createSoundEngine, DEFAULT_SOUND_SETTINGS, normalizeSoundSettings } from "./core/sound-engine.js";
 import { AlexRealtime } from "./core/realtime.js";
+import { WorkspaceDataController } from "./core/workspace-data.js";
 import { elements, query } from "./ui/elements-phase2.js";
 import { createPresenceCommands } from "./ui/presence-commands.js";
 import { createPresenceView } from "./ui/presence-view.js";
@@ -143,20 +144,87 @@ function setWorkspace(workspace) {
   elements.commandNav.querySelectorAll("button[data-workspace]").forEach((button) => {
     button.classList.toggle("active", button instanceof HTMLButtonElement && button.dataset.workspace === workspace);
   });
+  if (workspace !== "brain") workspaceData.cancelBrainPolling();
   renderActiveWorkspace();
 }
+
+const workspaceData = new WorkspaceDataController(api, renderActiveWorkspace);
 
 function renderActiveWorkspace() {
   const metadata = WORKSPACES[activeWorkspace];
   elements.workspaceEyebrow.textContent = metadata.eyebrow;
   elements.workspaceTitle.textContent = metadata.title;
   elements.workspaceDescription.textContent = metadata.description;
+  if (activeWorkspace === "logs") {
+    workspaceData.loadAudit();
+  } else if (activeWorkspace === "brain") {
+    workspaceData.loadBrain();
+  } else if (activeWorkspace === "automations") {
+    workspaceData.loadAutomations();
+  } else if (activeWorkspace === "missions") {
+    workspaceData.loadMissions();
+  } else if (activeWorkspace === "backup") {
+    workspaceData.loadBackups();
+  } else if (activeWorkspace === "scenes") {
+    workspaceData.loadScenes();
+  }
   renderWorkspace(elements.workspaceContent, activeWorkspace, snapshot, {
-    onRelay: (id, action) => { void executeRelayCommand(id, action); },
-    onTestLed: (value) => { void executeTestLedCommand(value); },
-    onMode: (mode) => { void executeModeCommand(mode); },
-    onOta: (version) => { void executeOtaCommand(version); },
+    onRelay: (/** @type {number} */ id, /** @type {"ON" | "OFF"} */ action) => { void executeRelayCommand(id, action); },
+    onTestLed: (/** @type {boolean} */ value) => { void executeTestLedCommand(value); },
+    onMode: (/** @type {import("./core/domain").RoomMode} */ mode) => { void executeModeCommand(mode); },
     onSettings: openExperienceDialog,
+    onOta: (/** @type {string} */ version) => { void executeOtaCommand(version); },
+    auditState: {
+      payload: workspaceData.auditPayload,
+      loading: workspaceData.auditLoading,
+      error: workspaceData.auditError,
+      onRefresh: () => workspaceData.loadAudit(true)
+    },
+    brainState: {
+      payload: workspaceData.brainPayload,
+      loading: workspaceData.brainLoading,
+      error: workspaceData.brainError,
+      wakeInFlight: workspaceData.brainWakeInFlight,
+      onRefresh: () => workspaceData.loadBrain(true),
+      onWake: () => workspaceData.executeWakeBrain()
+    },
+    automationsState: {
+      payload: workspaceData.automationsPayload,
+      loading: workspaceData.automationsLoading,
+      error: workspaceData.automationsError,
+      runInFlight: workspaceData.automationRunInFlight,
+      saveInFlight: workspaceData.automationSaveInFlight,
+      onRefresh: () => workspaceData.loadAutomations(true),
+      onRun: (/** @type {string} */ id) => workspaceData.runAutomation(id),
+      onSave: (/** @type {string} */ id, /** @type {import("./core/domain").AutomationDefinition} */ definition) => workspaceData.saveAutomation(id, definition)
+    },
+    missionsState: {
+      missionsPayload: workspaceData.missionsPayload,
+      missionRunsPayload: workspaceData.missionRunsPayload,
+      loading: workspaceData.missionsLoading,
+      error: workspaceData.missionsError,
+      runInFlight: workspaceData.missionRunInFlight,
+      saveInFlight: workspaceData.missionSaveInFlight,
+      onRefresh: () => workspaceData.loadMissions(true),
+      onRun: (/** @type {string} */ id) => workspaceData.runMission(id),
+      onSave: (/** @type {string} */ id, /** @type {import("./core/domain").MissionDefinition} */ definition) => workspaceData.saveMission(id, definition)
+    },
+    backupState: {
+      payload: workspaceData.backupPayload,
+      loading: workspaceData.backupLoading,
+      error: workspaceData.backupError,
+      createInFlight: workspaceData.backupCreateInFlight,
+      onRefresh: () => workspaceData.loadBackups(true),
+      onCreate: () => workspaceData.createBackup()
+    },
+    scenesState: {
+      payload: workspaceData.scenesPayload,
+      loading: workspaceData.scenesLoading,
+      error: workspaceData.scenesError,
+      saveInFlight: workspaceData.sceneSaveInFlight,
+      onRefresh: () => workspaceData.loadScenes(true),
+      onSave: (/** @type {string} */ id, /** @type {import("./core/domain").SceneDefinition} */ definition) => workspaceData.saveScene(id, definition)
+    }
   });
 }
 
@@ -650,6 +718,7 @@ function destroyRuntime() {
   presenceCommands.destroy();
   presenceView.destroy();
   void soundEngine.destroy();
+  workspaceData.destroy();
 }
 
 void init();
