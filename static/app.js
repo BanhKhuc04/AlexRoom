@@ -165,6 +165,8 @@ function renderActiveWorkspace() {
     workspaceData.loadMissions();
   } else if (activeWorkspace === "backup") {
     workspaceData.loadBackups();
+  } else if (activeWorkspace === "scenes") {
+    workspaceData.loadScenes();
   }
   renderWorkspace(elements.workspaceContent, activeWorkspace, snapshot, {
     onRelay: (/** @type {number} */ id, /** @type {"ON" | "OFF"} */ action) => { void executeRelayCommand(id, action); },
@@ -214,6 +216,14 @@ function renderActiveWorkspace() {
       createInFlight: workspaceData.backupCreateInFlight,
       onRefresh: () => workspaceData.loadBackups(true),
       onCreate: () => workspaceData.createBackup()
+    },
+    scenesState: {
+      payload: workspaceData.scenesPayload,
+      loading: workspaceData.scenesLoading,
+      error: workspaceData.scenesError,
+      saveInFlight: workspaceData.sceneSaveInFlight,
+      onRefresh: () => workspaceData.loadScenes(true),
+      onSave: (/** @type {string} */ id, /** @type {import("./core/domain").SceneDefinition} */ definition) => workspaceData.saveScene(id, definition)
     }
   });
 }

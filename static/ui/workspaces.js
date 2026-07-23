@@ -681,7 +681,119 @@ export function renderBackup(state) {
 /** 
  * @param {{ snapshot: SystemSnapshot | null, state?: ScenesWorkspaceState | undefined }} props
  */
+function renderScenes({ snapshot, state }) {
+  const current = snapshot?.device.mode ?? "home";
+  const modes = ["home", "study", "sleep", "away"];
+  
+  let html = `<article class="workspace-panel" style="margin-bottom: 2rem;">
+    <h2>Current Room Mode</h2>
+    <p>Mode hiện tại: <b>${escapeHtml(current.toUpperCase())}</b>. Các mode này chỉ cập nhật ngữ cảnh logic.</p>
+    <div class="relay-grid">
+      ${modes.map((mode) => { 
+        return `<article class="relay-card"><header><div><span>LOGICAL ROOM MODE</span><h3>${mode.toUpperCase()}</h3><p>${mode === current ? "Đang hoạt động" : "Không thực thi relay"}</p></div><b class="relay-state ${mode === current ? "on" : ""}">${mode === current ? "ACTIVE" : "LOGIC ONLY"}</b></header><div class="relay-actions"><button type="button" data-room-mode="${mode}">${mode === current ? "KÍCH HOẠT LẠI" : "KÍCH HOẠT"}</button></div></article>`; 
+      }).join("")}
+    </div>
+  </article>`;
 
+  if (state) {
+    if (state.loading && !state.payload) {
+      html += `<article class="workspace-panel"><h2>Saved Scenes</h2><p class="loading-state">Đang tải cấu hình scenes...</p></article>`;
+    } else {
+      let inlineErrorHtml = "";
+      if (state.error) {
+        if (!state.payload) {
+          html += `<article class="workspace-panel"><h2>Saved Scenes</h2><p class="status-warning">${escapeHtml(state.error)}</p><button class="primary-action" type="button" data-refresh-scenes>THỬ LẠI</button></article>`;
+          return html;
+        }
+        inlineErrorHtml = `<div class="status-badge status-critical" style="margin-bottom: 1rem;">${escapeHtml(state.error)} <button type="button" data-refresh-scenes class="secondary-action" style="margin-left: 1rem;">THỬ LẠI</button></div>`;
+      }
+
+      const payload = state.payload || [];
+      const loadingHtml = state.loading ? ` <span class="syncing">Đang đồng bộ...</span>` : ``;
+
+      const savedHtml = payload.map((/** @type {import("../core/domain").SceneRecord} */ sc) => {
+        const isEditable = isEditableScene(sc);
+        const stepsArray = Array.isArray(sc.steps) ? sc.steps : [];
+        const isMalformed = sc.steps !== undefined && !Array.isArray(sc.steps);
+        const stepsHtml = isMalformed ? "INVALID FORMAT" : stepsArray.length;
+        
+        const hasRestricted = stepsArray.some(a => a && typeof a === "object" && a.target && typeof a.target === "string" && a.target.startsWith("relay_"));
+        const restrictionBadge = hasRestricted ? `<div class="status-badge status-critical">RESTRICTED HARDWARE</div>` : "";
+
+        const editBtn = isEditable 
+          ? `<button class="secondary-action" type="button" data-edit-scene="${escapeHtml(sc.id)}">SỬA</button>`
+          : `<span class="advanced-badge">${isMalformed ? "INVALID / READ ONLY" : "ADVANCED / READ ONLY"}</span>`;
+
+        return `
+          <div class="card scene-card" style="margin-bottom: 1rem;">
+            <h3>${escapeHtml(sc.name)}</h3>
+            <p>Số steps: ${stepsHtml} | Nguồn: ${escapeHtml(sc.source || "unknown")}</p>
+            ${restrictionBadge}
+            <div class="card-actions" style="margin-top: 1rem;">
+              ${editBtn}
+            </div>
+          </div>
+        `;
+      }).join("");
+
+      html += `<article class="workspace-panel">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <h2>Saved Scenes${loadingHtml}</h2>
+          <div class="relay-actions">
+            <button class="secondary-action" type="button" data-refresh-scenes>LÀM MỚI</button>
+            <button class="primary-action" type="button" data-create-scene>TẠO MỚI</button>
+          </div>
+        </div>
+        ${inlineErrorHtml}
+        <div class="scenes-list">
+          ${payload.length > 0 ? savedHtml : "<p>Chưa có scene nào được lưu.</p>"}
+        </div>
+      </article>
+
+      <dialog id="scene-dialog" class="alex-dialog">
+        <h2 id="scene-dialog-title">Tạo Scene mới</h2>
+        <form id="scene-form" method="dialog">
+          <input type="hidden" name="editingId" value="" />
+          <input type="hidden" name="originalSource" value="" />
+          
+          <div class="form-group">
+            <label for="sceneName">Tên Scene</label>
+            <input type="text" id="sceneName" name="sceneName" class="alex-input" placeholder="VD: Tập trung làm việc" />
+            <p id="sceneNameError" class="status-warning" style="display: none; margin-top: 0.5rem;"></p>
+          </div>
+
+          <div id="sceneStepsContainer"></div>
+
+          <div class="form-group" style="margin-top: 1rem;">
+            <button type="button" id="addSceneActionBtn" class="secondary-action" style="font-size: 0.85em;">+ THÊM STEP (TEST LED CHỈ ĐỊNH)</button>
+          </div>
+
+          <p id="scene-form-error" class="status-warning" style="display: none; margin-top: 1rem;"></p>
+
+          <div class="relay-actions" style="margin-top: 2rem; justify-content: flex-end;">
+            <button type="button" class="secondary-action" data-close-scene>HỦY BỎ</button>
+            <button type="submit" class="primary-action" id="scene-submit-btn">LƯU</button>
+          </div>
+        </form>
+      </dialog>
+      `;
+    }
+  }
+
+  return html;
+}
+
+/** @param {import("../core/domain").SceneDefinition} scene */
+function isEditableScene(scene) {
+  if (scene.steps === undefined) return true;
+  if (!Array.isArray(scene.steps)) return false;
+  for (const step of scene.steps) {
+    if (step.node_id !== "esp01" || step.target !== "test_led" || step.action !== "set" || typeof step.value !== "boolean" || "payload" in step) {
+      return false;
+    }
+  }
+  return true;
+}
 
 /** @param {import("../core/domain").MissionDefinition} mission */
 function isEditableMission(mission) {
@@ -1294,7 +1406,180 @@ export function renderWorkspace(container, workspace, snapshot, actions) {
     }
   }
   else if (workspace === "system") container.innerHTML = renderSystem(snapshot);
+  else if (workspace === "scenes") {
+    const sState = actions.scenesState;
+    container.innerHTML = renderScenes(sState ? { snapshot, state: sState } : { snapshot });
 
+    const refreshBtn = container.querySelector("[data-refresh-scenes]");
+    if (refreshBtn && sState?.onRefresh) {
+      refreshBtn.addEventListener("click", () => sState.onRefresh());
+    }
+
+    const dialog = container.querySelector("#scene-dialog");
+    const form = container.querySelector("#scene-form");
+    const closeBtn = container.querySelector("[data-close-scene]");
+    const submitBtn = container.querySelector("#scene-submit-btn");
+    const dialogTitle = container.querySelector("#scene-dialog-title");
+    const formError = container.querySelector("#scene-form-error");
+    const stepsContainer = container.querySelector("#sceneStepsContainer");
+    const addStepBtn = container.querySelector("#addSceneActionBtn");
+    const editingIdInput = form?.querySelector("input[name='editingId']");
+    const originalSourceInput = form?.querySelector("input[name='originalSource']");
+
+    /**
+     * @param {import("../core/domain").SceneStepDefinition[]} steps
+     */
+    const renderSteps = (steps) => {
+      if (!stepsContainer) return;
+      stepsContainer.innerHTML = steps.map((s, idx) => `
+        <div class="scene-step-editor" style="margin-bottom: 1rem; border: 1px solid var(--border-color); padding: 1rem;" data-step-index="${idx}">
+          <p><strong>Step ${idx + 1}</strong></p>
+          <label>Test LED</label>
+          <select name="stepValue_${idx}" class="alex-input">
+            <option value="true" ${s.value ? "selected" : ""}>BẬT (ON)</option>
+            <option value="false" ${!s.value ? "selected" : ""}>TẮT (OFF)</option>
+          </select>
+          <button type="button" class="secondary-action" data-remove-step="${idx}" style="margin-top: 0.5rem; color: var(--alex-error);">XÓA STEP</button>
+        </div>
+      `).join("");
+
+      stepsContainer.querySelectorAll("[data-remove-step]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          if (!(btn instanceof HTMLButtonElement)) return;
+          const index = parseInt(btn.dataset.removeStep || "0", 10);
+          
+          /** @type {import("../core/domain").SceneStepDefinition[]} */
+          const currentSteps = [];
+          stepsContainer?.querySelectorAll(".scene-step-editor").forEach((el, idx2) => {
+            const sel = el.querySelector(`select[name="stepValue_${idx2}"]`);
+            const value = sel instanceof HTMLSelectElement ? sel.value === "true" : true;
+            currentSteps.push({ node_id: "esp01", target: "test_led", action: "set", value });
+          });
+          
+          currentSteps.splice(index, 1);
+          renderSteps(currentSteps);
+        });
+      });
+    };
+
+    /** @param {string|null} id @param {import("../core/domain").SceneRecord} [scene] */
+    const openEditor = (id, scene) => {
+      if (!dialog || !(dialog instanceof HTMLDialogElement)) return;
+      if (!form || !(form instanceof HTMLFormElement)) return;
+      
+      form.reset();
+      if (formError instanceof HTMLElement) formError.style.display = "none";
+      const nameInput = form.querySelector("input[name='sceneName']");
+      const nameError = form.querySelector("#sceneNameError");
+      if (nameError instanceof HTMLElement) nameError.style.display = "none";
+      if (submitBtn instanceof HTMLButtonElement) {
+        submitBtn.disabled = false;
+      }
+
+      if (id && scene) {
+        if (dialogTitle) dialogTitle.textContent = "Sửa Scene";
+        if (submitBtn) submitBtn.textContent = "CẬP NHẬT";
+        if (nameInput instanceof HTMLInputElement) nameInput.value = scene.name;
+        if (editingIdInput instanceof HTMLInputElement) editingIdInput.value = id;
+        if (originalSourceInput instanceof HTMLInputElement) originalSourceInput.value = scene.source || "";
+        
+        const steps = Array.isArray(scene.steps) ? JSON.parse(JSON.stringify(scene.steps)) : [];
+        renderSteps(steps);
+      } else {
+        if (dialogTitle) dialogTitle.textContent = "Tạo Scene mới";
+        if (submitBtn) submitBtn.textContent = "LƯU";
+        if (editingIdInput instanceof HTMLInputElement) editingIdInput.value = "";
+        if (originalSourceInput instanceof HTMLInputElement) originalSourceInput.value = "";
+        renderSteps([]);
+      }
+
+      dialog.showModal();
+    };
+
+    container.querySelector("[data-create-scene]")?.addEventListener("click", () => {
+      openEditor(null);
+    });
+
+    container.querySelectorAll("[data-edit-scene]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        if (!(btn instanceof HTMLButtonElement)) return;
+        const id = btn.dataset.editScene;
+        const scene = sState?.payload?.find((/** @type {import("../core/domain").SceneRecord} */ s) => s.id === id);
+        if (id && scene) {
+          openEditor(id, scene);
+        }
+      });
+    });
+
+    closeBtn?.addEventListener("click", () => {
+      if (dialog instanceof HTMLDialogElement) dialog.close();
+    });
+
+    addStepBtn?.addEventListener("click", () => {
+      if (!(dialog instanceof HTMLDialogElement)) return;
+      
+      /** @type {import("../core/domain").SceneStepDefinition[]} */
+      const currentSteps = [];
+      stepsContainer?.querySelectorAll(".scene-step-editor").forEach((el, idx) => {
+        const sel = el.querySelector(`select[name="stepValue_${idx}"]`);
+        const value = sel instanceof HTMLSelectElement ? sel.value === "true" : true;
+        currentSteps.push({ node_id: "esp01", target: "test_led", action: "set", value });
+      });
+      
+      currentSteps.push({ node_id: "esp01", target: "test_led", action: "set", value: true });
+      renderSteps(currentSteps);
+    });
+
+    if (form instanceof HTMLFormElement) {
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const fd = new FormData(form);
+        const name = String(fd.get("sceneName") ?? "").trim();
+        const nameError = form.querySelector("#sceneNameError");
+        
+        if (!name) {
+          if (nameError instanceof HTMLElement) { nameError.textContent = "Tên Scene không được để trống."; nameError.style.display = "block"; }
+          return;
+        }
+
+        const editingId = String(fd.get("editingId") ?? "");
+        const originalSource = String(fd.get("originalSource") ?? "") || "local_software";
+        
+        /** @type {import("../core/domain").SceneStepDefinition[]} */
+        const currentSteps = [];
+        stepsContainer?.querySelectorAll(".scene-step-editor").forEach((el, idx) => {
+          const sel = el.querySelector(`select[name="stepValue_${idx}"]`);
+          const value = sel instanceof HTMLSelectElement ? sel.value === "true" : true;
+          currentSteps.push({ node_id: "esp01", target: "test_led", action: "set", value });
+        });
+
+        const id = editingId || "scene_" + generateId();
+        /** @type {import("../core/domain").SceneDefinition} */
+        const definition = {
+          name,
+          source: editingId ? originalSource : "local_software",
+          steps: currentSteps,
+        };
+
+        if (submitBtn instanceof HTMLButtonElement) { submitBtn.disabled = true; submitBtn.textContent = "Đang lưu..."; }
+
+        sState?.onSave(id, definition).then((/** @type {boolean} */ success) => {
+          if (success) {
+            if (dialog instanceof HTMLDialogElement) dialog.close();
+          } else {
+            if (submitBtn instanceof HTMLButtonElement) {
+              submitBtn.disabled = false;
+              submitBtn.textContent = editingId ? "CẬP NHẬT" : "LƯU";
+            }
+            if (formError instanceof HTMLElement) {
+              formError.textContent = "Không thể lưu. Kiểm tra kết nối backend và thử lại.";
+              formError.style.display = "block";
+            }
+          }
+        });
+      });
+    }
+  }
   else if (workspace === "settings") container.innerHTML = `<article class="workspace-panel"><h2>Experience settings</h2><p>Điều chỉnh performance/balanced/cinematic, reduced motion và sound modes/gain groups.</p><button class="primary-action" type="button" data-open-experience>MỞ CÀI ĐẶT</button></article>`;
   else container.innerHTML = renderFoundation(workspace);
 

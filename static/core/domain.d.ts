@@ -293,3 +293,23 @@ export interface BackupHistoryPayload {
   retention: number;
   directory: string;
 }
+
+// --- Scene State ---
+export interface SceneStepDefinition {
+  node_id?: string;
+  target: string;
+  action: string;
+  value?: JsonValue;
+  payload?: Record<string, JsonValue>;
+}
+
+export interface SceneDefinition {
+  name: string;
+  source?: string;
+  steps?: SceneStepDefinition[];
+}
+
+export interface SceneRecord extends SceneDefinition {
+  id: string;
+  updated_at?: string;
+}

@@ -79,6 +79,15 @@ export class WorkspaceDataController {
     /** @type {string | null} */
     this.backupError = null;
     this.backupCreateInFlight = false;
+
+    // Scenes State
+    /** @type {import("./domain").SceneRecord[] | null} */
+    this.scenesPayload = null;
+    this.scenesLoading = false;
+    /** @type {string | null} */
+    this.scenesError = null;
+    /** @type {Set<string>} */
+    this.sceneSaveInFlight = new Set();
   }
 
   // === LIFECYCLE ===
@@ -346,6 +355,52 @@ export class WorkspaceDataController {
     } finally {
       this.backupCreateInFlight = false;
       this._notify();
+    }
+  }
+
+  // === SCENES ===
+  
+  loadScenes(force = false) {
+    if (this.scenesLoading) return;
+    if (!force && (this.scenesPayload !== null || this.scenesError !== null)) return;
+    
+    this.scenesLoading = true;
+    this.scenesError = null;
+    this._notify();
+
+    this.api.getScenes().then((payload) => {
+      if (this._destroyed) return;
+      this.scenesPayload = payload.items;
+      this.scenesLoading = false;
+      this._notify();
+    }).catch((error) => {
+      if (this._destroyed) return;
+      console.error("Scenes load failed", error);
+      this.scenesError = "Loi khi tai du lieu Scenes.";
+      this.scenesLoading = false;
+      this._notify();
+    });
+  }
+
+  /**
+   * @param {string} id
+   * @param {import("./domain").SceneDefinition} definition
+   * @returns {Promise<boolean>}
+   */
+  async saveScene(id, definition) {
+    if (this.sceneSaveInFlight.has(id)) return false;
+    this.sceneSaveInFlight.add(id);
+    
+    try {
+      await this.api.saveScene(id, definition);
+      this.scenesError = null;
+      this.loadScenes(true);
+      return true;
+    } catch (error) {
+      console.error("Scene save failed", error);
+      return false;
+    } finally {
+      this.sceneSaveInFlight.delete(id);
     }
   }
 }

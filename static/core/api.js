@@ -258,4 +258,23 @@ export class AlexApi {
     }));
   }
 
+  /**
+   * @returns {Promise<{items: import("./domain").SceneRecord[], source: string}>}
+   */
+  async getScenes() {
+    return /** @type {Promise<{items: import("./domain").SceneRecord[], source: string}>} */ (this.request("/api/v1/scenes"));
+  }
+
+  /**
+   * @param {string} id
+   * @param {import("./domain").SceneDefinition} definition
+   * @returns {Promise<{saved: boolean, domain: string, id: string, source: string}>}
+   */
+  async saveScene(id, definition) {
+    return /** @type {Promise<{saved: boolean, domain: string, id: string, source: string}>} */ (this.request(`/api/v1/scenes/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: definition })
+    }));
+  }
 }
