@@ -595,11 +595,171 @@ function renderScenes(snapshot) {
   const modes = ["home", "study", "sleep", "away", "relax", "energy saving"];
   return `<article class="workspace-panel"><h2>Room modes</h2><p>Mode hiện tại: <b>${escapeHtml(current.toUpperCase())}</b>. Home, Study, Sleep và Away chỉ cập nhật ngữ cảnh logic; không mode nào được phép gửi lệnh đến bốn relay chưa xác minh.</p><div class="relay-grid">${modes.map((mode) => { const supported = ["home", "study", "sleep", "away"].includes(mode); return `<article class="relay-card"><header><div><span>${supported ? "LOGICAL ROOM MODE" : "SCENE DRAFT"}</span><h3>${mode.toUpperCase()}</h3><p>${mode === current ? "Đang hoạt động · không relay" : supported ? "Không thực thi relay" : "Chưa có backend steps"}</p></div><b class="relay-state ${mode === current ? "on" : ""}">${mode === current ? "ACTIVE" : supported ? "LOGIC ONLY" : "LOCKED"}</b></header><div class="relay-actions"><button type="button" ${supported ? `data-room-mode="${mode}"` : "disabled"}>${supported ? "KÍCH HOẠT" : "CHƯA KHẢ DỤNG"}</button></div></article>`; }).join("")}</div></article>`;
 }
+/** @param {import("../core/domain").MissionDefinition} mission */
+function isEditableMission(mission) {
+  if (!Array.isArray(mission.steps) || mission.steps.length === 0) return false;
+  for (const step of mission.steps) {
+    if (step.node_id !== "esp01" || step.target !== "test_led" || step.action !== "set" || typeof step.value !== "boolean" || "payload" in step) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * @param {{ missionsPayload: import("../core/domain").MissionRecord[] | null, missionRunsPayload: import("../core/domain").MissionRunRecord[] | null, loading: boolean, error: string | null, runInFlight: Set<string>, saveInFlight: Set<string>, onRefresh?: () => void, onRun?: (id: string) => void, onSave?: (id: string, definition: import("../core/domain").MissionDefinition) => Promise<boolean> }} state
+ */
+export function renderMissions(state) {
+  if (!state || (state.loading && !state.missionsPayload)) return `<article class="workspace-panel"><h2>Missions</h2><p class="loading-state">Đang tải cấu hình nhiệm vụ...</p></article>`;
+
+  let inlineErrorHtml = "";
+  if (state.error) {
+    if (!state.missionsPayload) {
+      return `<article class="workspace-panel"><h2>Missions</h2><p class="status-warning">${escapeHtml(state.error)}</p><button class="primary-action" type="button" data-refresh-missions>THỬ LẠI</button></article>`;
+    }
+    inlineErrorHtml = `<div class="status-badge status-critical" style="margin-bottom: 1rem;">${escapeHtml(state.error)} <button type="button" data-refresh-missions class="secondary-action" style="margin-left: 1rem;">THỬ LẠI</button></div>`;
+  }
+
+  const payload = state.missionsPayload || [];
+  const runsPayload = state.missionRunsPayload || [];
+  const loadingHtml = state.loading ? ` <span class="syncing">Đang đồng bộ...</span>` : ``;
+
+  // --- SAVED MISSIONS ---
+  const savedHtml = payload.map((/** @type {import("../core/domain").MissionRecord} */ m) => {
+    const isEditable = isEditableMission(m);
+    const stepsArray = Array.isArray(m.steps) ? m.steps : [];
+    const isMalformed = !Array.isArray(m.steps);
+    const stepsHtml = isMalformed ? "INVALID FORMAT" : stepsArray.length;
+    
+    // Safety check on steps for rendering restricted notice
+    const hasRestricted = stepsArray.some(s => s && typeof s === "object" && s.target && typeof s.target === "string" && s.target.startsWith("relay_"));
+    const restrictionBadge = hasRestricted ? `<div class="status-badge status-critical">RESTRICTED HARDWARE</div>` : "";
+
+    const editBtn = isEditable 
+      ? `<button class="secondary-action" type="button" data-edit-mission="${escapeHtml(m.id)}">SỬA</button>`
+      : `<span class="advanced-badge">${isMalformed ? "INVALID / READ ONLY" : "ADVANCED / READ ONLY"}</span>`;
+      
+    const runBtn = `<button class="primary-action" type="button" data-run-mission="${escapeHtml(m.id)}" ${state.runInFlight?.has(m.id) ? "disabled" : ""}>RUN MISSION</button>`;
+
+    return `
+      <div class="card mission-card">
+        <h3>${escapeHtml(m.name)}</h3>
+        <p>Số bước: ${stepsHtml} | Nguồn: ${escapeHtml(m.source || "unknown")}</p>
+        ${restrictionBadge}
+        <div class="card-actions">
+          ${runBtn}
+          ${editBtn}
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  const savedSection = `
+    <section>
+      <h2>SAVED MISSIONS</h2>
+      <div class="card-grid">
+        ${savedHtml || '<p>Không có nhiệm vụ nào.</p>'}
+      </div>
+      <div style="margin-top: 1rem;">
+        <button class="primary-action" type="button" data-create-mission>+ TẠO MISSION</button>
+      </div>
+    </section>
+  `;
+
+  // --- RUN HISTORY ---
+  const runsHtml = runsPayload.map((/** @type {import("../core/domain").MissionRunRecord} */ r) => {
+    let statusClass = "status-success";
+    if (r.status === "failed") statusClass = "status-critical";
+    if (r.status === "partial") statusClass = "status-warning";
+    if (r.status === "running") statusClass = "status-syncing";
+
+    const stepsStr = (r.steps || []).map((/** @type {import("../core/domain").MissionStepResult} */ s) => {
+      let stepClass = "status-success";
+      if (s.status === "failed") stepClass = "status-critical";
+      if (s.status === "waiting_ack" || s.status === "running") stepClass = "status-syncing";
+      const failureReason = s.failure_reason ? ` (Lỗi: ${escapeHtml(s.failure_reason)})` : "";
+      
+      let safetyHtml = "";
+      if (s.safety_decision) {
+        const sd = s.safety_decision;
+        const sdColor = sd.allowed ? "status-success" : "status-critical";
+        const sdStatus = sd.allowed ? "ALLOWED" : "DENIED";
+        const sdHw = sd.node_hardware_verified ? "VERIFIED" : "UNVERIFIED";
+        const sdHwColor = sd.node_hardware_verified ? "status-success" : "status-critical";
+        safetyHtml = `<div style="font-size: 0.85em; margin-top: 0.25rem; padding-left: 1rem; border-left: 2px solid var(--border-color);">
+          <div>Safety: <strong class="${sdColor}">${sdStatus}</strong> ${sd.reason ? ` - ${escapeHtml(sd.reason)}` : ""}</div>
+          <div>Verification: ${escapeHtml(sd.verification_status)} (HW: <span class="${sdHwColor}">${sdHw}</span>)</div>
+        </div>`;
+      }
+      return `<li style="margin-bottom: 0.5rem;">[${s.index}] ${escapeHtml(s.target)} ${escapeHtml(s.action)}: <span class="${stepClass}">${escapeHtml(s.status)}</span>${failureReason}${safetyHtml}</li>`;
+    }).join("");
+
+    return `
+      <div class="card run-card">
+        <h3>${escapeHtml(r.name)} (${escapeHtml(r.mission_id)})</h3>
+        <p>Trạng thái: <strong class="${statusClass}">${escapeHtml(r.status.toUpperCase())}</strong></p>
+        <p>Bắt đầu: ${escapeHtml(r.started_at)}</p>
+        ${r.completed_at ? `<p>Hoàn thành: ${escapeHtml(r.completed_at)}</p>` : ""}
+        <ul>${stepsStr}</ul>
+      </div>
+    `;
+  }).join("");
+
+  const runsSection = `
+    <section style="margin-top: 2rem; border-top: 1px solid var(--border-color); padding-top: 2rem;">
+      <h2>RUN HISTORY</h2>
+      <div class="card-grid">
+        ${runsHtml || '<p>Không có lịch sử thực thi.</p>'}
+      </div>
+    </section>
+  `;
+
+  return `
+    <article class="workspace-panel">
+      <div class="panel-header">
+        <h2>Missions ${loadingHtml}</h2>
+        <button class="icon-button" type="button" aria-label="Làm mới" data-refresh-missions>↻</button>
+      </div>
+      ${inlineErrorHtml}
+      ${savedSection}
+      ${runsSection}
+      
+      <dialog id="mission-dialog" class="alex-dialog">
+        <div class="dialog-content" style="max-height: 80vh; overflow-y: auto;">
+          <h2 id="mission-dialog-title">Thêm Mission</h2>
+          <form id="mission-form" method="dialog">
+            <div class="form-group">
+              <label>Tên Mission</label>
+              <input type="text" name="name" required class="alex-input" placeholder="Ví dụ: Relax Mode" />
+            </div>
+            
+            <div class="form-group" id="missionStepsContainer">
+              <!-- Steps injected here -->
+            </div>
+            
+            <div style="margin-bottom: 1rem;">
+              <button class="secondary-action" type="button" id="addMissionStepBtn">+ Thêm bước (Test LED)</button>
+            </div>
+            
+            <input type="hidden" name="editingId" value="" />
+            <input type="hidden" name="originalSource" value="" />
+            <p id="mission-form-error" class="status-critical" style="display: none;"></p>
+            <div class="dialog-actions">
+              <button class="secondary-action" type="button" data-close-mission>HỦY</button>
+              <button class="primary-action" type="submit" id="mission-submit-btn">LƯU</button>
+            </div>
+          </form>
+        </div>
+      </dialog>
+    </article>
+  `;
+}
+
 /**
  * @param {HTMLElement} container
  * @param {string} workspace
  * @param {SystemSnapshot | null} snapshot
- * @param {{onRelay: (id: number, action: "ON" | "OFF") => void, onTestLed: (value: boolean) => void, onMode: (mode: import("../core/domain").RoomMode) => void, onSettings: () => void, onOta?: (version: string) => void, auditState?: any, brainState?: any, automationsState?: any}} actions
+ * @param {{onRelay: (id: number, action: "ON" | "OFF") => void, onTestLed: (value: boolean) => void, onMode: (mode: import("../core/domain").RoomMode) => void, onSettings: () => void, onOta?: (version: string) => void, auditState?: any, brainState?: any, automationsState?: any, missionsState?: any}} actions
  */
 export function renderWorkspace(container, workspace, snapshot, actions) {
   if (workspace === "overview") container.innerHTML = renderOverview(snapshot);
@@ -641,14 +801,28 @@ export function renderWorkspace(container, workspace, snapshot, actions) {
         if (!id) return;
         const rule = automState?.payload?.find((/** @type {import("../core/domain").AutomationRecord} */ r) => r.id === id);
         if (rule && automState?.onSave) {
-          automState.onSave(id, {
-            name: rule.name,
-            enabled: !rule.enabled,
-            trigger: rule.trigger,
-            conditions: rule.conditions,
-            actions: rule.actions,
-            source: rule.source || "local_software",
-          });
+          const originalText = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = "...";
+          (async () => {
+            const success = await automState.onSave(id, {
+              name: rule.name,
+              enabled: !rule.enabled,
+              trigger: rule.trigger,
+              conditions: rule.conditions,
+              actions: rule.actions,
+              source: rule.source || "local_software",
+            });
+            if (!success) {
+              btn.disabled = false;
+              btn.textContent = "LỖI LƯU";
+              btn.classList.add("status-critical");
+              setTimeout(() => {
+                btn.textContent = originalText;
+                btn.classList.remove("status-critical");
+              }, 3000);
+            }
+          })();
         }
       });
     });
@@ -837,6 +1011,180 @@ export function renderWorkspace(container, workspace, snapshot, actions) {
             formError.style.display = "block";
           }
         }
+      });
+    }
+  }
+  else if (workspace === "missions") {
+    container.innerHTML = renderMissions(actions.missionsState);
+    const mState = actions.missionsState;
+
+    const refreshBtn = container.querySelector("[data-refresh-missions]");
+    if (refreshBtn && mState?.onRefresh) {
+      refreshBtn.addEventListener("click", () => mState.onRefresh());
+    }
+
+    container.querySelectorAll("[data-run-mission]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        if (!(btn instanceof HTMLButtonElement)) return;
+        const id = btn.dataset.runMission;
+        if (id && mState?.onRun) mState.onRun(id);
+      });
+    });
+
+    const dialog = container.querySelector("#mission-dialog");
+    const form = container.querySelector("#mission-form");
+    const closeBtn = container.querySelector("[data-close-mission]");
+    const submitBtn = container.querySelector("#mission-submit-btn");
+    const dialogTitle = container.querySelector("#mission-dialog-title");
+    const formError = container.querySelector("#mission-form-error");
+    const stepsContainer = container.querySelector("#missionStepsContainer");
+    const addStepBtn = container.querySelector("#addMissionStepBtn");
+    const editingIdInput = form?.querySelector("input[name='editingId']");
+    const originalSourceInput = form?.querySelector("input[name='originalSource']");
+
+    /**
+     * @param {import("../core/domain").MissionStepDefinition[]} steps
+     */
+    const renderSteps = (steps) => {
+      if (!stepsContainer) return;
+      stepsContainer.innerHTML = steps.map((s, idx) => `
+        <div class="mission-step-editor" style="margin-bottom: 1rem; border: 1px solid var(--border-color); padding: 1rem;" data-step-index="${idx}">
+          <p><strong>Bước ${idx + 1}</strong></p>
+          <label>Test LED</label>
+          <select name="stepValue_${idx}" class="alex-input">
+            <option value="true" ${s.value ? "selected" : ""}>BẬT (ON)</option>
+            <option value="false" ${!s.value ? "selected" : ""}>TẮT (OFF)</option>
+          </select>
+          <button type="button" class="secondary-action" data-remove-step="${idx}" style="margin-top: 0.5rem;">Xóa bước</button>
+        </div>
+      `).join("");
+
+      stepsContainer.querySelectorAll("[data-remove-step]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          if (!(btn instanceof HTMLButtonElement)) return;
+          const idx = Number(btn.dataset.removeStep);
+          steps.splice(idx, 1);
+          renderSteps(steps);
+        });
+      });
+    };
+
+    if (
+      dialog instanceof HTMLDialogElement &&
+      form instanceof HTMLFormElement
+    ) {
+      const resetForm = () => {
+        form.reset();
+        if (formError instanceof HTMLElement) formError.style.display = "none";
+        if (submitBtn instanceof HTMLButtonElement) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = "LƯU";
+        }
+        if (editingIdInput instanceof HTMLInputElement) editingIdInput.value = "";
+        if (originalSourceInput instanceof HTMLInputElement) originalSourceInput.value = "";
+        if (dialogTitle) dialogTitle.textContent = "Thêm Mission";
+        
+        // Default to one step for create
+        renderSteps([{ node_id: "esp01", target: "test_led", action: "set", value: true }]);
+      };
+
+      const createBtn = container.querySelector("[data-create-mission]");
+      if (createBtn) {
+        createBtn.addEventListener("click", () => {
+          resetForm();
+          dialog.showModal();
+        });
+      }
+
+      container.querySelectorAll("[data-edit-mission]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          if (!(btn instanceof HTMLButtonElement)) return;
+          const id = btn.dataset.editMission;
+          if (!id) return;
+          const mission = mState?.missionsPayload?.find((/** @type {import("../core/domain").MissionRecord} */ r) => r.id === id);
+          if (!mission) return;
+
+          resetForm();
+          if (editingIdInput instanceof HTMLInputElement) editingIdInput.value = id;
+          if (originalSourceInput instanceof HTMLInputElement) originalSourceInput.value = mission.source || "local_software";
+          if (dialogTitle) dialogTitle.textContent = "Sửa Mission";
+          if (submitBtn instanceof HTMLButtonElement) submitBtn.textContent = "CẬP NHẬT";
+
+          const nameInput = form.querySelector("input[name='name']");
+          if (nameInput instanceof HTMLInputElement) nameInput.value = mission.name;
+
+          renderSteps(JSON.parse(JSON.stringify(mission.steps || [])));
+          dialog.showModal();
+        });
+      });
+
+      if (closeBtn) closeBtn.addEventListener("click", () => dialog.close());
+      
+      if (addStepBtn) {
+        addStepBtn.addEventListener("click", () => {
+          /** @type {import("../core/domain").MissionStepDefinition[]} */
+          const currentSteps = [];
+          stepsContainer?.querySelectorAll(".mission-step-editor").forEach((el, idx) => {
+            const sel = el.querySelector(`select[name="stepValue_${idx}"]`);
+            const value = sel instanceof HTMLSelectElement ? sel.value === "true" : true;
+            currentSteps.push({ node_id: "esp01", target: "test_led", action: "set", value });
+          });
+          currentSteps.push({ node_id: "esp01", target: "test_led", action: "set", value: true });
+          renderSteps(currentSteps);
+        });
+      }
+
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        
+        /** @type {import("../core/domain").MissionStepDefinition[]} */
+        const currentSteps = [];
+        stepsContainer?.querySelectorAll(".mission-step-editor").forEach((el, idx) => {
+          const sel = el.querySelector(`select[name="stepValue_${idx}"]`);
+          const value = sel instanceof HTMLSelectElement ? sel.value === "true" : true;
+          currentSteps.push({ node_id: "esp01", target: "test_led", action: "set", value });
+        });
+
+        if (currentSteps.length === 0) {
+          if (formError instanceof HTMLElement) { formError.textContent = "Mission phải có ít nhất 1 bước."; formError.style.display = "block"; }
+          return;
+        }
+
+        const fd = new FormData(form);
+        const name = String(fd.get("name") ?? "").trim();
+        if (!name) {
+          if (formError instanceof HTMLElement) { formError.textContent = "Tên Mission không được để trống."; formError.style.display = "block"; }
+          return;
+        }
+
+        const editingId = String(fd.get("editingId") ?? "");
+        const originalSource = String(fd.get("originalSource") ?? "") || "local_software";
+        const id = editingId || "mission_" + generateId();
+        
+        const definition = {
+          name,
+          source: editingId ? originalSource : "local_software",
+          steps: currentSteps
+        };
+
+        if (submitBtn instanceof HTMLButtonElement) { submitBtn.disabled = true; submitBtn.textContent = "Đang lưu..."; }
+
+        // Must use an IIFE or separate async function here to await since listener is sync wrapper if we don't return promise
+        (async () => {
+          const success = await mState?.onSave(id, definition);
+          if (success) {
+            dialog.close();
+          } else {
+            if (submitBtn instanceof HTMLButtonElement) {
+              submitBtn.disabled = false;
+              submitBtn.textContent = editingId ? "CẬP NHẬT" : "LƯU";
+            }
+            if (formError instanceof HTMLElement) {
+              formError.textContent = "Không thể lưu. Kiểm tra kết nối backend và thử lại.";
+              formError.style.display = "block";
+            }
+          }
+        })();
       });
     }
   }

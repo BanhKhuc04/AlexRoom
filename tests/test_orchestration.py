@@ -49,6 +49,31 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual([step["status"] for step in mission["steps"]], ["confirmed", "failed"])
         self.assertEqual(mission["steps"][1]["failure_reason"], "restricted_capability")
 
+    def test_mission_malformed_steps_collection_fails(self) -> None:
+        mission_empty = self.missions.run({"name": "empty", "source": "simulated", "steps": []})
+        self.assertEqual(mission_empty["status"], "failed")
+        self.assertEqual(len(mission_empty["steps"]), 0)
+        self.assertIsNotNone(mission_empty["completed_at"])
+
+        mission_none = self.missions.run({"name": "none", "source": "simulated", "steps": None})
+        self.assertEqual(mission_none["status"], "failed")
+        self.assertIsNotNone(mission_none["completed_at"])
+
+        mission_dict = self.missions.run({"name": "dict", "source": "simulated", "steps": {"action": "invalid"}})
+        self.assertEqual(mission_dict["status"], "failed")
+        self.assertIsNotNone(mission_dict["completed_at"])
+
+    def test_mission_malformed_step_fails_closed(self) -> None:
+        mission = self.missions.run({"name": "malformed", "source": "simulated", "steps": [
+            "this_is_not_a_dict",
+            {"target": "test_led", "action": "set", "value": True, "risk_level": "safe"}
+        ]})
+        self.assertEqual(mission["status"], "partial")
+        self.assertEqual(len(mission["steps"]), 2)
+        self.assertEqual(mission["steps"][0]["status"], "failed")
+        self.assertEqual(mission["steps"][0]["failure_reason"], "malformed_step")
+        self.assertEqual(mission["steps"][1]["status"], "confirmed")
+
     def test_automation_conditions_and_restricted_gate(self) -> None:
         executor = AutomationExecutor(self.store, self.missions, self.gateway)
         safe = executor.evaluate({

@@ -277,12 +277,22 @@ test("WorkspaceDataController duplicate saveAutomation same ID is blocked", asyn
   };
   const wdc = new WorkspaceDataController(api, () => {});
   const def = { name: "t", enabled: true, trigger: { type: "manual" }, conditions: [], actions: [] };
-  wdc.saveAutomation("id1", def);
-  wdc.saveAutomation("id1", def); // duplicate
+  const p1 = wdc.saveAutomation("id1", def);
+  const p2 = wdc.saveAutomation("id1", def); // duplicate
   await new Promise(r => setTimeout(r, 5));
   if (resolveFn) resolveFn({ saved: true });
-  await new Promise(r => setTimeout(r, 5));
+  const [res1, res2] = await Promise.all([p1, p2]);
   assert.equal(saveCalls, 1);
+  assert.equal(res1, true);
+  assert.equal(res2, false);
+});
+
+test("WorkspaceDataController saveAutomation failure returns false", async () => {
+  const api = new AlexApi();
+  api.saveAutomation = async () => { throw new Error("save fail"); };
+  const wdc = new WorkspaceDataController(api, () => {});
+  const res = await wdc.saveAutomation("id1", { name: "t", enabled: true, trigger: { type: "manual" }, conditions: [], actions: [] });
+  assert.equal(res, false);
 });
 
 test("WorkspaceDataController successful save triggers backend reload", async () => {

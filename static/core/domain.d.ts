@@ -121,28 +121,65 @@ export type AutomationBlockedReason =
   | "safety_policy_denied"
   | null;
 
-export type MissionStatus = "running" | "completed" | "partial" | "failed";
+export type MissionRunStatus = "running" | "completed" | "partial" | "failed";
+export type MissionStepStatus = "running" | "waiting_ack" | "confirmed" | "failed";
 
-export interface MissionStep {
+export interface SafetyDecision {
+  allowed: boolean;
+  reason: string | null;
+  node_id: string;
+  capability_id: string;
+  action: string;
+  risk_level: string;
+  verification_status: string;
+  node_hardware_verified: boolean;
+  execution_mode: string;
+}
+
+export interface MissionStepDefinition {
+  node_id?: string;
+  target: string;
+  action: string;
+  value?: JsonValue;
+  payload?: Record<string, JsonValue>;
+}
+
+export interface MissionDefinition {
+  name: string;
+  source?: string;
+  steps: MissionStepDefinition[];
+}
+
+export interface MissionRecord extends MissionDefinition {
+  id: string;
+  updated_at?: string;
+}
+
+export interface MissionStepResult {
   index: number;
-  target: string | null;
-  action: string | null;
-  status: string;
+  target: string;
+  action: string;
+  status: MissionStepStatus;
   command_id: string | null;
   failure_reason: string | null;
-  safety_decision: { allowed: boolean; reason: string | null; } | null;
+  safety_decision: SafetyDecision | null;
   started_at: string;
   completed_at: string | null;
 }
 
-export interface MissionResult {
+export interface MissionRun {
   mission_id: string;
   name: string;
-  status: MissionStatus;
+  status: MissionRunStatus;
   started_at: string;
   completed_at: string | null;
-  steps: MissionStep[];
+  steps: MissionStepResult[];
   source: string;
+}
+
+export interface MissionRunRecord extends MissionRun {
+  id: string;
+  updated_at?: string;
 }
 
 export interface AutomationDefinition {
@@ -160,14 +197,14 @@ export interface AutomationRecord extends AutomationDefinition {
   lastEvaluation?: string;
   lastRun?: string;
   blockedReason?: AutomationBlockedReason;
-  result?: MissionStatus;
+  result?: MissionRunStatus;
   duration?: number;
 }
 
 export interface AutomationRunResult {
   matched: boolean;
   blocked_reason: AutomationBlockedReason;
-  mission: MissionResult | null;
+  mission: MissionRun | null;
   evaluation: AutomationRecord;
 }
 

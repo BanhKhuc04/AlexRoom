@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Orchestrates workspace-specific asynchronous data (Audit, Brain, Automations).
  */
 
@@ -58,6 +58,19 @@ export class WorkspaceDataController {
     this.automationRunInFlight = new Set();
     /** @type {Set<string>} */
     this.automationSaveInFlight = new Set();
+
+    // Missions State
+    /** @type {import("./domain").MissionRecord[] | null} */
+    this.missionsPayload = null;
+    /** @type {import("./domain").MissionRunRecord[] | null} */
+    this.missionRunsPayload = null;
+    this.missionsLoading = false;
+    /** @type {string | null} */
+    this.missionsError = null;
+    /** @type {Set<string>} */
+    this.missionRunInFlight = new Set();
+    /** @type {Set<string>} */
+    this.missionSaveInFlight = new Set();
   }
 
   // === LIFECYCLE ===
@@ -180,11 +193,11 @@ export class WorkspaceDataController {
   /**
    * @param {string} id
    * @param {import("./domain").AutomationDefinition} definition
+   * @returns {Promise<boolean>}
    */
   async saveAutomation(id, definition) {
     if (this.automationSaveInFlight.has(id)) return false;
     this.automationSaveInFlight.add(id);
-    this._notify();
     try {
       await this.api.saveAutomation(id, definition);
       this.automationsError = null;
@@ -192,12 +205,9 @@ export class WorkspaceDataController {
       return true;
     } catch (err) {
       console.error("Save automation failed", err);
-      this.automationsError = "Loi luu Automation. Vui long thu lai.";
-      this._notify();
       return false;
     } finally {
       this.automationSaveInFlight.delete(id);
-      this._notify();
     }
   }
 
@@ -216,6 +226,70 @@ export class WorkspaceDataController {
       this.automationsError = `Loi khi chay Rule ${id}.`;
     }).finally(() => {
       this.automationRunInFlight.delete(id);
+      this._notify();
+    });
+  }
+
+  // === MISSIONS ===
+
+  loadMissions(force = false) {
+    if (this.missionsLoading) return;
+    if (!force && (this.missionsPayload || this.missionsError)) return;
+    this.missionsLoading = true;
+    this.missionsError = null;
+    this._notify();
+    
+    Promise.all([
+      this.api.getMissions(),
+      this.api.getMissionRuns()
+    ]).then(([missions, runs]) => {
+      this.missionsPayload = missions.items;
+      this.missionRunsPayload = runs.items;
+    }).catch((error) => {
+      console.error("Missions load failed", error);
+      this.missionsError = "Loi khi tai Missions. Vui long thu lai.";
+    }).finally(() => {
+      this.missionsLoading = false;
+      this._notify();
+    });
+  }
+
+  /**
+   * @param {string} id
+   * @param {import("./domain").MissionDefinition} definition
+   * @returns {Promise<boolean>}
+   */
+  async saveMission(id, definition) {
+    if (this.missionSaveInFlight.has(id)) return false;
+    this.missionSaveInFlight.add(id);
+    
+    try {
+      await this.api.saveMission(id, definition);
+      this.loadMissions(true);
+      return true;
+    } catch (error) {
+      console.error("Mission save failed", error);
+      return false;
+    } finally {
+      this.missionSaveInFlight.delete(id);
+    }
+  }
+
+  /**
+   * @param {string} id
+   */
+  runMission(id) {
+    if (this.missionRunInFlight.has(id)) return;
+    this.missionRunInFlight.add(id);
+    this._notify();
+
+    this.api.runMission(id).then(() => {
+      this.loadMissions(true);
+    }).catch((error) => {
+      console.error("Mission run failed", error);
+      this.missionsError = `Loi khi chay Mission ${id}.`;
+    }).finally(() => {
+      this.missionRunInFlight.delete(id);
       this._notify();
     });
   }

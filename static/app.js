@@ -161,6 +161,8 @@ function renderActiveWorkspace() {
     workspaceData.loadBrain();
   } else if (activeWorkspace === "automations") {
     workspaceData.loadAutomations();
+  } else if (activeWorkspace === "missions") {
+    workspaceData.loadMissions();
   }
   renderWorkspace(elements.workspaceContent, activeWorkspace, snapshot, {
     onRelay: (id, action) => { void executeRelayCommand(id, action); },
@@ -191,6 +193,17 @@ function renderActiveWorkspace() {
       onRefresh: () => workspaceData.loadAutomations(true),
       onRun: (/** @type {string} */ id) => workspaceData.runAutomation(id),
       onSave: (/** @type {string} */ id, /** @type {import("./core/domain").AutomationDefinition} */ definition) => workspaceData.saveAutomation(id, definition)
+    },
+    missionsState: {
+      missionsPayload: workspaceData.missionsPayload,
+      missionRunsPayload: workspaceData.missionRunsPayload,
+      loading: workspaceData.missionsLoading,
+      error: workspaceData.missionsError,
+      runInFlight: workspaceData.missionRunInFlight,
+      saveInFlight: workspaceData.missionSaveInFlight,
+      onRefresh: () => workspaceData.loadMissions(true),
+      onRun: (/** @type {string} */ id) => workspaceData.runMission(id),
+      onSave: (/** @type {string} */ id, /** @type {import("./core/domain").MissionDefinition} */ definition) => workspaceData.saveMission(id, definition)
     }
   });
 }

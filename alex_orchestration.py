@@ -30,9 +30,30 @@ class MissionExecutor:
             "source": definition.get("source", "local_software"),
         }
         self.store.put_record("mission_runs", mission["mission_id"], mission)
+        
+        steps = definition.get("steps")
+        if not isinstance(steps, list):
+            mission["status"] = "failed"
+            mission["completed_at"] = utc_now()
+            self.store.put_record("mission_runs", mission["mission_id"], mission)
+            self.store.add_audit("mission", f"{mission['mission_id']} failed", "warning", mission["source"])
+            return deepcopy(mission)
+
         successful = 0
         failed = 0
-        for index, spec in enumerate(definition.get("steps", [])):
+        for index, spec in enumerate(steps):
+            if not isinstance(spec, dict):
+                step = {
+                    "index": index, "target": "unknown", "action": "unknown",
+                    "status": "failed", "command_id": None, "failure_reason": "malformed_step",
+                    "safety_decision": None,
+                    "started_at": utc_now(), "completed_at": utc_now(),
+                }
+                mission["steps"].append(step)
+                failed += 1
+                self.store.put_record("mission_runs", mission["mission_id"], mission)
+                continue
+
             step = {
                 "index": index, "target": spec.get("target"), "action": spec.get("action"),
                 "status": "running", "command_id": None, "failure_reason": None,
@@ -83,7 +104,9 @@ class MissionExecutor:
             step["completed_at"] = utc_now()
             self.store.put_record("mission_runs", mission["mission_id"], mission)
         mission["completed_at"] = utc_now()
-        if failed == 0:
+        if not mission["steps"]:
+            mission["status"] = "failed"
+        elif failed == 0:
             mission["status"] = "completed"
         elif successful > 0:
             mission["status"] = "partial"

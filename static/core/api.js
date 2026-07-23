@@ -201,4 +201,43 @@ export class AlexApi {
       body: JSON.stringify({ type: "manual" })
     }));
   }
+
+  /**
+   * @returns {Promise<{items: import("./domain").MissionRecord[], source: string}>}
+   */
+  async getMissions() {
+    return /** @type {Promise<{items: import("./domain").MissionRecord[], source: string}>} */ (this.request("/api/v1/missions"));
+  }
+
+  /**
+   * @returns {Promise<{items: import("./domain").MissionRunRecord[], source: string}>}
+   */
+  async getMissionRuns() {
+    return /** @type {Promise<{items: import("./domain").MissionRunRecord[], source: string}>} */ (this.request("/api/v1/mission_runs"));
+  }
+
+  /**
+   * @param {string} id
+   * @param {import("./domain").MissionDefinition} definition
+   * @returns {Promise<{saved: boolean, domain: string, id: string, source: string}>}
+   */
+  async saveMission(id, definition) {
+    return /** @type {Promise<{saved: boolean, domain: string, id: string, source: string}>} */ (this.request(`/api/v1/missions/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: definition })
+    }));
+  }
+
+  /**
+   * @param {string} id
+   * @returns {Promise<import("./domain").MissionRun>}
+   */
+  async runMission(id) {
+    return /** @type {Promise<import("./domain").MissionRun>} */ (this.request(`/api/v1/missions/${encodeURIComponent(id)}/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    }));
+  }
 }
