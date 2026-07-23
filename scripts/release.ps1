@@ -1,10 +1,21 @@
 param(
-  [string]$Version
+  [string]$Version,
+  [string]$SourceRoot
 )
 
 $ErrorActionPreference = "Stop"
 
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$defaultRepoRoot = Join-Path $PSScriptRoot ".."
+
+if ([string]::IsNullOrWhiteSpace($SourceRoot)) {
+  $SourceRoot = $defaultRepoRoot
+}
+
+if (-not (Test-Path -LiteralPath $SourceRoot -PathType Container)) {
+  throw "Release source root does not exist: $SourceRoot"
+}
+
+$repoRoot = (Resolve-Path -LiteralPath $SourceRoot).Path
 $versionFile = Join-Path $repoRoot "VERSION"
 
 if (-not (Test-Path -LiteralPath $versionFile)) {
@@ -55,7 +66,8 @@ $directories = @(
   "deploy",
   "scripts",
   "tests",
-  "firmware"
+  "firmware",
+  "brain_service"
 )
 
 foreach ($directory in $directories) {

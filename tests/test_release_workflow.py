@@ -11,11 +11,20 @@ WORKFLOW_FILE = (
     / "release.yml"
 )
 
+RELEASE_SCRIPT = (
+    BASE_DIR
+    / "scripts"
+    / "release.ps1"
+)
+
 
 class TestReleaseWorkflow(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.workflow = WORKFLOW_FILE.read_text(
+            encoding="utf-8",
+        )
+        cls.release_script = RELEASE_SCRIPT.read_text(
             encoding="utf-8",
         )
 
@@ -194,6 +203,27 @@ class TestReleaseWorkflow(unittest.TestCase):
                 pattern,
                 self.workflow,
             )
+
+    def test_release_script_can_package_an_explicit_source_root(self):
+        required = (
+            "[string]$SourceRoot",
+            "Release source root does not exist",
+            "Resolve-Path -LiteralPath $SourceRoot",
+        )
+
+        for item in required:
+            self.assertIn(
+                item,
+                self.release_script,
+            )
+
+    def test_release_script_packages_brain_service(self):
+        self.assertRegex(
+            self.release_script,
+            re.compile(
+                r'(?m)^\s+"brain_service"\s*$'
+            ),
+        )
 
     def test_release_publication_has_collision_guards(self):
         required_guards = (
