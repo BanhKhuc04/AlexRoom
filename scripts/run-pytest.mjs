@@ -1,12 +1,26 @@
-import { execSync } from 'child_process';
-import os from 'os';
-import path from 'path';
+import { execFileSync } from "child_process";
+import fs from "fs";
+import os from "os";
+import path from "path";
 
-const isWindows = os.platform() === 'win32';
-const venvPath = path.join('.venv', isWindows ? 'Scripts' : 'bin', isWindows ? 'python.exe' : 'python');
+const isWindows = os.platform() === "win32";
+
+const venvPython = path.join(
+  ".venv",
+  isWindows ? "Scripts" : "bin",
+  isWindows ? "python.exe" : "python"
+);
+
+const python = fs.existsSync(venvPython)
+  ? venvPython
+  : isWindows
+    ? "python"
+    : "python3";
 
 try {
-  execSync(venvPath + " -m pytest -q tests/", { stdio: "inherit" });
+  execFileSync(python, ["-m", "pytest", "-q", "tests/"], {
+    stdio: "inherit",
+  });
 } catch {
   process.exit(1);
 }
