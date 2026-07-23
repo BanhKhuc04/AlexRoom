@@ -141,12 +141,30 @@ class AutomationExecutor:
         for condition in conditions:
             if not isinstance(condition, dict):
                 return False
-            if condition.get("type") == "node_connection" and device["connection"] != condition.get("equals"):
-                return False
-            if condition.get("type") == "reported_state":
-                actual = device["reported_state"].get(condition.get("target"), {}).get(condition.get("field"))
-                if actual != condition.get("equals"):
+            ctype = condition.get("type")
+            if ctype == "node_connection":
+                if "equals" not in condition:
                     return False
+                if device["connection"] != condition["equals"]:
+                    return False
+            elif ctype == "reported_state":
+                target = condition.get("target")
+                field = condition.get("field")
+                if not target or not isinstance(target, str):
+                    return False
+                if not field or not isinstance(field, str):
+                    return False
+                if "equals" not in condition:
+                    return False
+                target_state = device["reported_state"].get(target)
+                if not isinstance(target_state, dict):
+                    return False
+                if field not in target_state:
+                    return False
+                if target_state[field] != condition["equals"]:
+                    return False
+            else:
+                return False
         return True
 
 

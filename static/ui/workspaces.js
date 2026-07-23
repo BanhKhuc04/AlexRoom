@@ -1,4 +1,5 @@
 /** @typedef {import("../core/domain").SystemSnapshot} SystemSnapshot */
+import { generateId } from "../core/workspace-data.js";
 
 export const WORKSPACES = Object.freeze({
   overview: { eyebrow: "SYSTEM OVERVIEW / LIVE", title: "Không gian vận hành", description: "Trạng thái thật từ Alex Core và node ESP01." },
@@ -208,6 +209,142 @@ export function renderBrain(state) {
   <button type="button" class="secondary-action" data-refresh-brain>LÀM MỚI</button>
 </div>
 ${state?.error ? `<p class="error" style="margin-top: 1rem;">${escapeHtml(state.error)}</p>` : ""}
+</article>`;
+}
+
+/** @param {string} triggerType */
+/** @param {import("../core/domain").AutomationRecord} rule */
+function isEditableRule(rule) {
+  const triggerType = rule.trigger?.type;
+  if (triggerType !== "manual" && triggerType !== "time") return false;
+
+  if (!rule.actions || rule.actions.length !== 1) return false;
+
+  const action = rule.actions[0];
+  if (!action) return false;
+  if (action.node_id !== "esp01") return false;
+  if (action.target !== "test_led") return false;
+  if (action.action !== "set") return false;
+  if (typeof action.value !== "boolean") return false;
+
+  return true;
+}
+
+/** @param {import("../core/domain").AutomationAction | undefined} action */
+function renderActionSummary(action) {
+  if (!action) return "—";
+  const target = action.target;
+  if (target === "test_led") {
+    const val = action.value === true ? "BẬT" : action.value === false ? "TẮT" : escapeHtml(String(action.value));
+    return `Test LED → ${val}`;
+  }
+  if (/^relay_[1-4]$/.test(target)) {
+    return `⚠ RESTRICTED HARDWARE: ${escapeHtml(target)} / ${escapeHtml(action.action)} — NOT VERIFIED`;
+  }
+  return `${escapeHtml(target)} / ${escapeHtml(action.action)}`;
+}
+
+/**
+ * @param {{
+ *   payload: import("../core/domain").AutomationRecord[] | null,
+ *   loading: boolean,
+ *   error: string | null,
+ *   runInFlight: Set<string>,
+ *   saveInFlight?: Set<string>
+ * } | null} state
+ */
+export function renderAutomations(state) {
+  if (state?.loading && !state?.payload) {
+    return `<article class="workspace-panel"><h2>Tự động hóa</h2><p>Đang tải dữ liệu từ backend...</p></article>`;
+  }
+  if (state?.error && !state?.payload) {
+    return `<article class="workspace-panel"><h2>Tự động hóa</h2><p class="error">${escapeHtml(state.error)}</p><div class="relay-actions"><button type="button" data-refresh-automations>THỬ LẠI</button></div></article>`;
+  }
+
+  const payload = state?.payload ?? [];
+  return `<article class="workspace-panel">
+<h2>Tự động hóa</h2>
+<p>Automation Rules engine. Rules define conditions and actions based on triggers.</p>
+<div class="relay-actions" style="margin-bottom: 1rem;">
+  <button type="button" data-refresh-automations>LÀM MỚI</button>
+  <button type="button" class="secondary-action" data-create-automation>TẠO MỚI</button>
+</div>
+${state?.error ? `<p class="error">${escapeHtml(state.error)}</p>` : ""}
+<ul class="integration-list" style="margin-bottom: 1rem;">
+  ${payload.length ? payload.map(rule => {
+    const triggerType = rule.trigger?.type ?? "manual";
+    const editable = isEditableRule(rule);
+    const action0 = rule.actions?.[0];
+    const actionSummary = renderActionSummary(action0);
+    const isRestricted = action0 && /^relay_[1-4]$/.test(action0.target);
+    return `
+    <li style="border-bottom: 1px solid var(--alex-text-dim); padding-bottom: 1rem; margin-bottom: 1rem;">
+      <div style="display: flex; justify-content: space-between; align-items: baseline;">
+        <h3>${escapeHtml(rule.name)}</h3>
+        <span class="${rule.enabled ? 'success' : 'error'}">${rule.enabled ? 'ENABLED' : 'DISABLED'}</span>
+      </div>
+      <p>Trigger: <strong>${escapeHtml(triggerType)}</strong>${triggerType === 'time' && rule.trigger && 'at' in rule.trigger ? ` lúc ${escapeHtml(rule.trigger.at)}` : ''}${!editable ? ' <em>(ADVANCED / AUTO ONLY)</em>' : ''}</p>
+      ${rule.conditions?.length ? `<p>Conditions: ${escapeHtml(JSON.stringify(rule.conditions))}</p>` : ''}
+      <p>Action: ${actionSummary}${isRestricted ? '<br/><em class="error">RESTRICTED / UNVERIFIED — không đủ điều kiện hiển thị sẵn sàng.</em>' : ''}</p>
+      <p>Source: ${escapeHtml(rule.source || 'local_software')}</p>
+      <div style="font-size: 0.9em; color: var(--alex-text-dim); margin-top: 0.5rem;">
+        Last Evaluation: ${formatTime(rule.lastEvaluation ?? null)}<br/>
+        Last Run: ${formatTime(rule.lastRun ?? null)}<br/>
+        Result: ${rule.result ? escapeHtml(rule.result) : '—'}<br/>
+        Blocked Reason: ${rule.blockedReason ? escapeHtml(rule.blockedReason) : '—'}
+      </div>
+      <div class="relay-actions" style="margin-top: 0.5rem;">
+        ${triggerType === 'manual'
+          ? `<button type="button" data-run-automation="${escapeHtml(rule.id)}" ${state?.runInFlight?.has(rule.id) ? 'disabled' : ''}>CHẠY NGAY</button>`
+          : `<button type="button" disabled>AUTO ONLY</button>`}
+        ${editable
+          ? `<button type="button" class="secondary-action" data-edit-automation="${escapeHtml(rule.id)}" ${state?.saveInFlight?.has(rule.id) ? 'disabled' : ''}>SỬA</button>`
+          : `<span style="font-size: 0.8em; color: var(--alex-text-dim);">ADVANCED / READ ONLY</span>`}
+        <button type="button" class="secondary-action" data-toggle-automation="${escapeHtml(rule.id)}" ${state?.saveInFlight?.has(rule.id) ? 'disabled' : ''}>${rule.enabled ? 'DISABLE' : 'ENABLE'}</button>
+      </div>
+    </li>
+  `;}).join('') : '<p>Chưa có automation nào.</p>'}
+</ul>
+
+<dialog id="automation-dialog" style="padding: 1.5rem; background: var(--alex-panel-bg); color: var(--alex-text); border: 1px solid var(--alex-text-dim); min-width: 340px;">
+  <form id="automation-form" novalidate>
+    <h3 id="automation-dialog-title">Tạo Automation Mới</h3>
+    <input type="hidden" name="editingId" value="" />
+    <input type="hidden" name="originalSource" value="" />
+    <div style="margin-bottom: 1rem;">
+      <label>Tên Rule:</label><br/>
+      <input type="text" name="name" required style="width: 100%; background: #000; color: #fff; border: 1px solid var(--alex-text-dim); padding: 0.5rem;" />
+    </div>
+    <div style="margin-bottom: 1rem;">
+      <label>Loại Trigger:</label><br/>
+      <select name="triggerType" required style="width: 100%; background: #000; color: #fff; border: 1px solid var(--alex-text-dim); padding: 0.5rem;">
+        <option value="manual">Manual (CHẠY NGAY)</option>
+        <option value="time">Time (Hẹn giờ)</option>
+      </select>
+    </div>
+    <div style="margin-bottom: 1rem; display: none;" id="triggerTimeContainer">
+      <label>Giờ chính xác (HH:MM, 08:00–23:59):</label><br/>
+      <input type="time" name="triggerAt" style="width: 100%; background: #000; color: #fff; border: 1px solid var(--alex-text-dim); padding: 0.5rem;" />
+      <p id="triggerAtError" style="color: var(--alex-error, #e55); font-size: 0.85em; display: none;">Giờ phải đúng định dạng HH:MM (ví dụ: 08:00).</p>
+    </div>
+    <div style="margin-bottom: 1rem;">
+      <label>Hành động (Test LED — Safe Only):</label><br/>
+      <select name="actionValue" required style="width: 100%; background: #000; color: #fff; border: 1px solid var(--alex-text-dim); padding: 0.5rem;">
+        <option value="true">Bật Test LED</option>
+        <option value="false">Tắt Test LED</option>
+      </select>
+      <p style="font-size: 0.8rem; color: var(--alex-text-dim); margin-top: 0.5rem;">Relay_1-4 không được phép (Restricted Hardware).</p>
+    </div>
+    <div style="margin-bottom: 1rem;">
+      <label><input type="checkbox" name="enabled" checked /> Kích hoạt ngay</label>
+    </div>
+    <p id="automation-form-error" style="color: var(--alex-error, #e55); display: none; margin-bottom: 0.5rem;"></p>
+    <div class="relay-actions">
+      <button type="submit" id="automation-submit-btn">LƯU</button>
+      <button type="button" class="secondary-action" data-close-automation>HỦY</button>
+    </div>
+  </form>
+</dialog>
 </article>`;
 }
 
@@ -458,13 +595,11 @@ function renderScenes(snapshot) {
   const modes = ["home", "study", "sleep", "away", "relax", "energy saving"];
   return `<article class="workspace-panel"><h2>Room modes</h2><p>Mode hiện tại: <b>${escapeHtml(current.toUpperCase())}</b>. Home, Study, Sleep và Away chỉ cập nhật ngữ cảnh logic; không mode nào được phép gửi lệnh đến bốn relay chưa xác minh.</p><div class="relay-grid">${modes.map((mode) => { const supported = ["home", "study", "sleep", "away"].includes(mode); return `<article class="relay-card"><header><div><span>${supported ? "LOGICAL ROOM MODE" : "SCENE DRAFT"}</span><h3>${mode.toUpperCase()}</h3><p>${mode === current ? "Đang hoạt động · không relay" : supported ? "Không thực thi relay" : "Chưa có backend steps"}</p></div><b class="relay-state ${mode === current ? "on" : ""}">${mode === current ? "ACTIVE" : supported ? "LOGIC ONLY" : "LOCKED"}</b></header><div class="relay-actions"><button type="button" ${supported ? `data-room-mode="${mode}"` : "disabled"}>${supported ? "KÍCH HOẠT" : "CHƯA KHẢ DỤNG"}</button></div></article>`; }).join("")}</div></article>`;
 }
-
 /**
  * @param {HTMLElement} container
  * @param {string} workspace
  * @param {SystemSnapshot | null} snapshot
- * @param {{onRelay: (id: number, action: "ON" | "OFF") => void, onTestLed: (value: boolean) => void, onMode: (mode: import("../core/domain").RoomMode) => void, onSettings: () => void, onOta?: (version: string) => void, auditState?: any, brainState?: any}} actions
-
+ * @param {{onRelay: (id: number, action: "ON" | "OFF") => void, onTestLed: (value: boolean) => void, onMode: (mode: import("../core/domain").RoomMode) => void, onSettings: () => void, onOta?: (version: string) => void, auditState?: any, brainState?: any, automationsState?: any}} actions
  */
 export function renderWorkspace(container, workspace, snapshot, actions) {
   if (workspace === "overview") container.innerHTML = renderOverview(snapshot);
@@ -485,6 +620,224 @@ export function renderWorkspace(container, workspace, snapshot, actions) {
     }
     if (wakeBtn && actions.brainState?.onWake) {
       wakeBtn.addEventListener("click", () => actions.brainState.onWake());
+    }
+  }
+  else if (workspace === "automations") {
+    container.innerHTML = renderAutomations(actions.automationsState);
+
+    const automState = actions.automationsState;
+
+    // Refresh
+    const refreshBtn = container.querySelector("[data-refresh-automations]");
+    if (refreshBtn && automState?.onRefresh) {
+      refreshBtn.addEventListener("click", () => automState.onRefresh());
+    }
+
+    // Toggle ENABLE/DISABLE — preserve source
+    container.querySelectorAll("[data-toggle-automation]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        if (!(btn instanceof HTMLButtonElement)) return;
+        const id = btn.dataset.toggleAutomation;
+        if (!id) return;
+        const rule = automState?.payload?.find((/** @type {import("../core/domain").AutomationRecord} */ r) => r.id === id);
+        if (rule && automState?.onSave) {
+          automState.onSave(id, {
+            name: rule.name,
+            enabled: !rule.enabled,
+            trigger: rule.trigger,
+            conditions: rule.conditions,
+            actions: rule.actions,
+            source: rule.source || "local_software",
+          });
+        }
+      });
+    });
+
+    // Run Now — manual only
+    container.querySelectorAll("[data-run-automation]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        if (!(btn instanceof HTMLButtonElement)) return;
+        const id = btn.dataset.runAutomation;
+        if (id && automState?.onRun) automState.onRun(id);
+      });
+    });
+
+    // Dialog helpers
+    const dialog = container.querySelector("#automation-dialog");
+    const form = container.querySelector("#automation-form");
+    const closeBtn = container.querySelector("[data-close-automation]");
+    const triggerTypeSel = form?.querySelector("select[name='triggerType']");
+    const timeContainer = form?.querySelector("#triggerTimeContainer");
+    const triggerAtInput = form?.querySelector("input[name='triggerAt']");
+    const triggerAtError = form?.querySelector("#triggerAtError");
+    const dialogTitle = form?.querySelector("#automation-dialog-title");
+    const formError = form?.querySelector("#automation-form-error");
+    const submitBtn = form?.querySelector("#automation-submit-btn");
+    const editingIdInput = form?.querySelector("input[name='editingId']");
+    const originalSourceInput = form?.querySelector("input[name='originalSource']");
+
+    /** @param {boolean} showTime */
+    function syncTimeVisibility(showTime) {
+      if (!(timeContainer instanceof HTMLElement)) return;
+      timeContainer.style.display = showTime ? "block" : "none";
+      if (triggerAtInput instanceof HTMLInputElement) triggerAtInput.required = showTime;
+    }
+
+    /** @param {string} at */
+    function isValidHHMM(at) {
+      return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(at);
+    }
+
+    /** Reset form for Create mode */
+    function resetFormCreate() {
+      if (!(form instanceof HTMLFormElement)) return;
+      form.reset();
+      if (editingIdInput instanceof HTMLInputElement) editingIdInput.value = "";
+      if (originalSourceInput instanceof HTMLInputElement) originalSourceInput.value = "";
+      if (dialogTitle) dialogTitle.textContent = "Tạo Automation Mới";
+      if (submitBtn instanceof HTMLButtonElement) submitBtn.textContent = "LƯU";
+      if (formError instanceof HTMLElement) formError.style.display = "none";
+      if (triggerAtError instanceof HTMLElement) triggerAtError.style.display = "none";
+      syncTimeVisibility(false);
+    }
+
+    if (
+      dialog instanceof HTMLDialogElement &&
+      form instanceof HTMLFormElement &&
+      triggerTypeSel instanceof HTMLSelectElement &&
+      timeContainer instanceof HTMLElement &&
+      triggerAtInput instanceof HTMLInputElement
+    ) {
+      // Create button
+      const createBtn = container.querySelector("[data-create-automation]");
+      if (createBtn) {
+        createBtn.addEventListener("click", () => {
+          resetFormCreate();
+          dialog.showModal();
+        });
+      }
+
+      // Edit button — populate from existing rule
+      container.querySelectorAll("[data-edit-automation]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          if (!(btn instanceof HTMLButtonElement)) return;
+          const id = btn.dataset.editAutomation;
+          if (!id) return;
+          const rule = automState?.payload?.find((/** @type {import("../core/domain").AutomationRecord} */ r) => r.id === id);
+          if (!rule) return;
+
+          resetFormCreate();
+          if (editingIdInput instanceof HTMLInputElement) editingIdInput.value = id;
+          if (originalSourceInput instanceof HTMLInputElement) originalSourceInput.value = rule.source || "local_software";
+          if (dialogTitle) dialogTitle.textContent = "Sửa Automation";
+          if (submitBtn instanceof HTMLButtonElement) submitBtn.textContent = "CẬP NHẬT";
+
+          // Populate fields
+          const nameInput = form.querySelector("input[name='name']");
+          if (nameInput instanceof HTMLInputElement) nameInput.value = rule.name;
+
+          const ttype = rule.trigger?.type;
+          if (ttype === "manual" || ttype === "time") {
+            triggerTypeSel.value = ttype;
+            if (ttype === "time") {
+              syncTimeVisibility(true);
+              const at = "at" in rule.trigger ? rule.trigger.at : "";
+              triggerAtInput.value = at;
+            }
+          }
+
+          const action0 = rule.actions?.[0];
+          const actionSelect = form.querySelector("select[name='actionValue']");
+          if (actionSelect instanceof HTMLSelectElement && action0?.target === "test_led") {
+            actionSelect.value = String(action0.value);
+          }
+
+          const enabledCheck = form.querySelector("input[name='enabled']");
+          if (enabledCheck instanceof HTMLInputElement) enabledCheck.checked = rule.enabled;
+
+          dialog.showModal();
+        });
+      });
+
+      // Close button — does NOT close before save
+      if (closeBtn) {
+        closeBtn.addEventListener("click", () => dialog.close());
+      }
+
+      // Trigger type change
+      triggerTypeSel.addEventListener("change", () => {
+        syncTimeVisibility(triggerTypeSel.value === "time");
+        if (triggerAtError instanceof HTMLElement) triggerAtError.style.display = "none";
+      });
+
+      // Submit — validate before saving, keep dialog open on error
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if (formError instanceof HTMLElement) formError.style.display = "none";
+        if (triggerAtError instanceof HTMLElement) triggerAtError.style.display = "none";
+
+        const fd = new FormData(form);
+        const name = String(fd.get("name") ?? "").trim();
+        if (!name) {
+          if (formError instanceof HTMLElement) { formError.textContent = "Tên Rule không được để trống."; formError.style.display = "block"; }
+          return;
+        }
+
+        const ttype = String(fd.get("triggerType") ?? "manual");
+        let triggerAt = "";
+        if (ttype === "time") {
+          triggerAt = String(fd.get("triggerAt") ?? "");
+          if (!isValidHHMM(triggerAt)) {
+            if (triggerAtError instanceof HTMLElement) triggerAtError.style.display = "block";
+            return;
+          }
+        }
+
+        const trigger = /** @type {import("../core/domain").AutomationTrigger} */(
+          ttype === "time" ? { type: "time", at: triggerAt } : { type: ttype }
+        );
+        const actionValue = fd.get("actionValue") === "true";
+        const enabled = (fd.get("enabled")) === "on";
+        const editingId = String(fd.get("editingId") ?? "");
+        const originalSource = String(fd.get("originalSource") ?? "") || "local_software";
+
+        // Existing rule being edited: find and preserve conditions (no condition editor in Phase 0.7.3)
+        const existingRule = editingId ? automState?.payload?.find((/** @type {import("../core/domain").AutomationRecord} */ r) => r.id === editingId) : null;
+
+        const id = editingId || "automation_" + generateId();
+        /** @type {import("../core/domain").AutomationDefinition} */
+        const definition = {
+          name,
+          enabled,
+          trigger,
+          // Preserve existing conditions when editing; no condition editor exposed in this phase
+          conditions: existingRule ? existingRule.conditions : [],
+          actions: [{
+            node_id: "esp01",
+            target: "test_led",
+            action: "set",
+            value: actionValue,
+          }],
+          source: editingId ? originalSource : "local_software",
+        };
+
+        if (submitBtn instanceof HTMLButtonElement) { submitBtn.disabled = true; submitBtn.textContent = "Đang lưu..."; }
+
+        const success = await automState?.onSave(id, definition);
+
+        if (success) {
+          dialog.close();
+        } else {
+          if (submitBtn instanceof HTMLButtonElement) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = editingId ? "CẬP NHẬT" : "LƯU";
+          }
+          if (formError instanceof HTMLElement) {
+            formError.textContent = "Không thể lưu. Kiểm tra kết nối backend và thử lại.";
+            formError.style.display = "block";
+          }
+        }
+      });
     }
   }
   else if (workspace === "system") container.innerHTML = renderSystem(snapshot);

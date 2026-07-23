@@ -1034,7 +1034,23 @@ def v1_put_domain(
         raise HTTPException(status_code=404, detail="Domain không tồn tại")
     if not record_id or len(record_id) > 80:
         raise HTTPException(status_code=400, detail="record_id không hợp lệ")
-    store.put_record(domain, record_id, payload.body)
+
+    # For automations: frontend sends only AutomationDefinition.
+    # Preserve authoritative runtime fields that only AutomationExecutor may write.
+    body = dict(payload.body)
+    if domain == "automations":
+        _RUNTIME_FIELDS = {"lastEvaluation", "lastRun", "blockedReason", "result", "duration"}
+        existing = store.get_record("automations", record_id)
+        # Strip any runtime fields the frontend may have sent (never trust frontend for these)
+        for field in _RUNTIME_FIELDS:
+            body.pop(field, None)
+        # Restore authoritative runtime values from existing record
+        if existing:
+            for field in _RUNTIME_FIELDS:
+                if field in existing:
+                    body[field] = existing[field]
+
+    store.put_record(domain, record_id, body)
     store.add_audit(domain, f"Updated {record_id}", "success")
     return {"saved": True, "domain": domain, "id": record_id, "source": "local_software"}
 

@@ -1,0 +1,222 @@
+﻿/**
+ * Orchestrates workspace-specific asynchronous data (Audit, Brain, Automations).
+ */
+
+/**
+ * Stable UUID helper - uses crypto.randomUUID when available,
+ * falls back to a non-cryptographic unique string otherwise.
+ * @returns {string}
+ */
+export function generateId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  // Non-secret uniqueness fallback (tests / old environments)
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+
+export class WorkspaceDataController {
+  /**
+   * @param {import("./api").AlexApi} api
+   * @param {() => void} onStateChange
+   */
+  constructor(api, onStateChange) {
+    this.api = api;
+    this.onStateChange = onStateChange;
+    this._destroyed = false;
+
+    // Audit State
+    /** @type {import("./domain").AuditPayload | null} */
+    this.auditPayload = null;
+    this.auditLoading = false;
+    /** @type {string | null} */
+    this.auditError = null;
+
+    // Brain State
+    /** @type {import("./domain").BrainStatus | null} */
+    this.brainPayload = null;
+    this.brainLoading = false;
+    /** @type {string | null} */
+    this.brainError = null;
+    this.brainWakeInFlight = false;
+    /** @type {number | NodeJS.Timeout | null} */
+    this.brainWakePollTimer = null;
+    this.brainWakePollCount = 0;
+    this.BRAIN_WAKE_POLL_INTERVAL_MS = 2000;
+    this.BRAIN_WAKE_MAX_POLLS = 23;
+
+    // Automations State
+    /** @type {import("./domain").AutomationRecord[] | null} */
+    this.automationsPayload = null;
+    this.automationsLoading = false;
+    /** @type {string | null} */
+    this.automationsError = null;
+    /** @type {Set<string>} */
+    this.automationRunInFlight = new Set();
+    /** @type {Set<string>} */
+    this.automationSaveInFlight = new Set();
+  }
+
+  // === LIFECYCLE ===
+
+  destroy() {
+    this._destroyed = true;
+    this.cancelBrainPolling();
+  }
+
+  _notify() {
+    if (!this._destroyed) this.onStateChange();
+  }
+
+  // === AUDIT ===
+
+  loadAudit(force = false) {
+    if (this.auditLoading) return;
+    if (!force && (this.auditPayload || this.auditError)) return;
+    this.auditLoading = true;
+    this.auditError = null;
+    this._notify();
+    this.api.getAudit().then((payload) => {
+      this.auditPayload = payload;
+    }).catch((error) => {
+      console.error("Audit load failed", error);
+      this.auditError = "Loi khi tai du lieu tu backend. Vui long thu lai sau.";
+    }).finally(() => {
+      this.auditLoading = false;
+      this._notify();
+    });
+  }
+
+  // === BRAIN ===
+
+  cancelBrainPolling() {
+    if (this.brainWakePollTimer) {
+      clearTimeout(/** @type {number} */(/** @type {unknown} */(this.brainWakePollTimer)));
+      this.brainWakePollTimer = null;
+    }
+    this.brainWakePollCount = 0;
+  }
+
+  _scheduleBrainPoll() {
+    if (!this.brainWakePollTimer && this.brainWakePollCount < this.BRAIN_WAKE_MAX_POLLS) {
+      this.brainWakePollTimer = setTimeout(() => {
+        this.brainWakePollTimer = null;
+        this.brainWakePollCount += 1;
+        this.loadBrain(true);
+      }, this.BRAIN_WAKE_POLL_INTERVAL_MS);
+    } else if (this.brainWakePollCount >= this.BRAIN_WAKE_MAX_POLLS) {
+      if (this.brainPayload && this.brainPayload.state === "waking") {
+        this.brainError = "Wake confirmation timed out. Vui long thu lai.";
+        this._notify();
+      }
+      this.cancelBrainPolling();
+    }
+  }
+
+  loadBrain(force = false) {
+    if (this.brainLoading) return;
+    if (!force && (this.brainPayload || this.brainError)) return;
+    this.brainLoading = true;
+    if (force) this.brainError = null;
+    this._notify();
+    this.api.getBrain().then((payload) => {
+      this.brainPayload = payload;
+      if (payload.state === "waking") {
+        this._scheduleBrainPoll();
+      } else {
+        this.cancelBrainPolling();
+      }
+    }).catch((error) => {
+      console.error("Brain load failed", error);
+      this.brainError = "Loi khi ket noi backend.";
+    }).finally(() => {
+      this.brainLoading = false;
+      this._notify();
+    });
+  }
+
+  executeWakeBrain() {
+    if (this.brainWakeInFlight) return;
+    this.brainWakeInFlight = true;
+    this.brainError = null;
+    this._notify();
+    this.api.wakeBrain().then((payload) => {
+      this.brainPayload = payload;
+      this.brainWakePollCount = 0;
+      if (payload.state === "waking") {
+        this._scheduleBrainPoll();
+      }
+    }).catch((error) => {
+      console.error("Brain wake failed", error);
+      this.brainError = "Loi yeu cau danh thuc. Vui long thu lai.";
+    }).finally(() => {
+      this.brainWakeInFlight = false;
+      this._notify();
+    });
+  }
+
+  // === AUTOMATIONS ===
+
+  loadAutomations(force = false) {
+    if (this.automationsLoading) return;
+    if (!force && (this.automationsPayload || this.automationsError)) return;
+    this.automationsLoading = true;
+    this.automationsError = null;
+    this._notify();
+    this.api.getAutomations().then((payload) => {
+      this.automationsPayload = payload.items;
+    }).catch((error) => {
+      console.error("Automations load failed", error);
+      this.automationsError = "Loi khi tai Automations. Vui long thu lai.";
+    }).finally(() => {
+      this.automationsLoading = false;
+      this._notify();
+    });
+  }
+
+  /**
+   * @param {string} id
+   * @param {import("./domain").AutomationDefinition} definition
+   */
+  async saveAutomation(id, definition) {
+    if (this.automationSaveInFlight.has(id)) return false;
+    this.automationSaveInFlight.add(id);
+    this._notify();
+    try {
+      await this.api.saveAutomation(id, definition);
+      this.automationsError = null;
+      this.loadAutomations(true);
+      return true;
+    } catch (err) {
+      console.error("Save automation failed", err);
+      this.automationsError = "Loi luu Automation. Vui long thu lai.";
+      this._notify();
+      return false;
+    } finally {
+      this.automationSaveInFlight.delete(id);
+      this._notify();
+    }
+  }
+
+  /**
+   * @param {string} id
+   */
+  runAutomation(id) {
+    if (this.automationRunInFlight.has(id)) return;
+    this.automationRunInFlight.add(id);
+    this.automationsError = null;
+    this._notify();
+    this.api.runAutomation(id).then(() => {
+      this.loadAutomations(true);
+    }).catch((error) => {
+      console.error("Automation run failed", error);
+      this.automationsError = `Loi khi chay Rule ${id}.`;
+    }).finally(() => {
+      this.automationRunInFlight.delete(id);
+      this._notify();
+    });
+  }
+}

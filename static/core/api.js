@@ -169,4 +169,36 @@ export class AlexApi {
   async wakeBrain() {
     return /** @type {Promise<import("./domain").BrainStatus>} */ (this.request("/api/v1/brain/wake", { method: "POST" }));
   }
+
+  /**
+   * @returns {Promise<{items: import("./domain").AutomationRecord[], source: string}>}
+   */
+  async getAutomations() {
+    return /** @type {Promise<{items: import("./domain").AutomationRecord[], source: string}>} */ (this.request("/api/v1/automations"));
+  }
+
+  /**
+   * @param {string} id
+   * @param {import("./domain").AutomationDefinition} definition
+   * @returns {Promise<{saved: boolean, domain: string, id: string, source: string}>}
+   */
+  async saveAutomation(id, definition) {
+    return /** @type {Promise<{saved: boolean, domain: string, id: string, source: string}>} */ (this.request(`/api/v1/automations/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: definition })
+    }));
+  }
+
+  /**
+   * @param {string} id
+   * @returns {Promise<import("./domain").AutomationRunResult>}
+   */
+  async runAutomation(id) {
+    return /** @type {Promise<import("./domain").AutomationRunResult>} */ (this.request(`/api/v1/automations/${encodeURIComponent(id)}/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "manual" })
+    }));
+  }
 }

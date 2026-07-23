@@ -68,17 +68,23 @@ test("renderBrain does not invent PORT 22", () => {
 });
 
 test("cached brain refetch and polling behavior (source analysis)", async () => {
-  const appSource = await readFile(new URL("../static/app.js", import.meta.url), "utf8");
+  // Brain logic now lives in WorkspaceDataController
+  const wdcSource = await readFile(new URL("../static/core/workspace-data.js", import.meta.url), "utf8");
   // Error retry loop fixed
-  assert.match(appSource, /if \(!force && \(brainPayload \|\| brainError\)\) return;/);
-  assert.match(appSource, /if \(brainLoading\) return;/);
-  // Bounded polling
-  assert.match(appSource, /const BRAIN_WAKE_POLL_INTERVAL_MS = 2000;/);
-  assert.match(appSource, /const BRAIN_WAKE_MAX_POLLS = 23;/);
-  assert.match(appSource, /brainWakePollCount < BRAIN_WAKE_MAX_POLLS/);
-  // Leave Brain cancels polling
-  assert.match(appSource, /if \(workspace !== "brain"\) cancelBrainPolling\(\);/);
-  // Wake flight
-  assert.match(appSource, /if \(brainWakeInFlight\) return;/);
-  assert.match(appSource, /onRefresh:\s*\(\)\s*=>\s*loadBrain\(true\)/);
+  assert.match(wdcSource, /if \(!force && \(this\.brainPayload \|\| this\.brainError\)\) return;/);
+  assert.match(wdcSource, /if \(this\.brainLoading\) return;/);
+  // Bounded polling constants
+  assert.match(wdcSource, /BRAIN_WAKE_POLL_INTERVAL_MS = 2000/);
+  assert.match(wdcSource, /BRAIN_WAKE_MAX_POLLS = 23/);
+  assert.match(wdcSource, /this\.brainWakePollCount < this\.BRAIN_WAKE_MAX_POLLS/);
+  // Polling cancel exists
+  assert.match(wdcSource, /cancelBrainPolling\(\)/);
+  // Wake flight guard
+  assert.match(wdcSource, /if \(this\.brainWakeInFlight\) return;/);
+
+  // app.js delegates to workspaceData
+  const appSource = await readFile(new URL("../static/app.js", import.meta.url), "utf8");
+  assert.match(appSource, /workspaceData\.cancelBrainPolling\(\)/);
+  assert.match(appSource, /workspaceData\.loadBrain\(true\)/);
+  assert.match(appSource, /workspaceData\.executeWakeBrain\(\)/);
 });

@@ -4,6 +4,7 @@ import { createDeviceCommand, transitionCommand } from "./core/command-lifecycle
 import { createMotionProfile, normalizeQualityMode } from "./core/quality.js";
 import { createSoundEngine, DEFAULT_SOUND_SETTINGS, normalizeSoundSettings } from "./core/sound-engine.js";
 import { AlexRealtime } from "./core/realtime.js";
+import { WorkspaceDataController } from "./core/workspace-data.js";
 import { elements, query } from "./ui/elements-phase2.js";
 import { createPresenceCommands } from "./ui/presence-commands.js";
 import { createPresenceView } from "./ui/presence-view.js";
@@ -143,112 +144,11 @@ function setWorkspace(workspace) {
   elements.commandNav.querySelectorAll("button[data-workspace]").forEach((button) => {
     button.classList.toggle("active", button instanceof HTMLButtonElement && button.dataset.workspace === workspace);
   });
-  if (workspace !== "brain") cancelBrainPolling();
+  if (workspace !== "brain") workspaceData.cancelBrainPolling();
   renderActiveWorkspace();
 }
 
-/** @type {import("./core/domain").AuditPayload | null} */
-let auditPayload = null;
-let auditLoading = false;
-/** @type {string | null} */
-let auditError = null;
-
-function loadAudit(force = false) {
-  if (auditLoading) return;
-  if (!force && (auditPayload || auditError)) return;
-  auditLoading = true;
-  auditError = null;
-  renderActiveWorkspace();
-  api.getAudit().then((payload) => {
-    auditPayload = payload;
-  }).catch((error) => {
-    console.error("Audit load failed", error);
-    auditError = "Lỗi khi tải dữ liệu từ backend. Vui lòng thử lại sau.";
-  }).finally(() => {
-    auditLoading = false;
-    renderActiveWorkspace();
-  });
-}
-
-/** @type {import("./core/domain").BrainStatus | null} */
-let brainPayload = null;
-let brainLoading = false;
-/** @type {string | null} */
-let brainError = null;
-let brainWakeInFlight = false;
-/** @type {number | NodeJS.Timeout | null} */
-let brainWakePollTimer = null;
-const BRAIN_WAKE_POLL_INTERVAL_MS = 2000;
-const BRAIN_WAKE_MAX_POLLS = 23;
-let brainWakePollCount = 0;
-
-function cancelBrainPolling() {
-  if (brainWakePollTimer) {
-    clearTimeout(/** @type {number} */(/** @type {unknown} */ (brainWakePollTimer)));
-    brainWakePollTimer = null;
-  }
-  brainWakePollCount = 0;
-}
-
-window.addEventListener("beforeunload", cancelBrainPolling);
-
-function scheduleBrainPoll() {
-  if (!brainWakePollTimer && brainWakePollCount < BRAIN_WAKE_MAX_POLLS) {
-    brainWakePollTimer = setTimeout(() => {
-      brainWakePollTimer = null;
-      brainWakePollCount += 1;
-      loadBrain(true);
-    }, BRAIN_WAKE_POLL_INTERVAL_MS);
-  } else if (brainWakePollCount >= BRAIN_WAKE_MAX_POLLS) {
-    if (brainPayload && brainPayload.state === "waking") {
-      brainError = "Wake confirmation timed out. Vui lòng thử lại.";
-      renderActiveWorkspace();
-    }
-    cancelBrainPolling();
-  }
-}
-
-function loadBrain(force = false) {
-  if (brainLoading) return;
-  if (!force && (brainPayload || brainError)) return;
-  brainLoading = true;
-  if (force) brainError = null;
-  renderActiveWorkspace();
-  api.getBrain().then((payload) => {
-    brainPayload = payload;
-    if (payload.state === "waking") {
-      scheduleBrainPoll();
-    } else {
-      cancelBrainPolling();
-    }
-  }).catch((error) => {
-    console.error("Brain load failed", error);
-    brainError = "Lỗi khi kết nối backend.";
-  }).finally(() => {
-    brainLoading = false;
-    renderActiveWorkspace();
-  });
-}
-
-function executeWakeBrain() {
-  if (brainWakeInFlight) return;
-  brainWakeInFlight = true;
-  brainError = null;
-  renderActiveWorkspace();
-  api.wakeBrain().then((payload) => {
-    brainPayload = payload;
-    brainWakePollCount = 0;
-    if (payload.state === "waking") {
-      scheduleBrainPoll();
-    }
-  }).catch((error) => {
-    console.error("Brain wake failed", error);
-    brainError = "Lỗi yêu cầu đánh thức. Vui lòng thử lại.";
-  }).finally(() => {
-    brainWakeInFlight = false;
-    renderActiveWorkspace();
-  });
-}
+const workspaceData = new WorkspaceDataController(api, renderActiveWorkspace);
 
 function renderActiveWorkspace() {
   const metadata = WORKSPACES[activeWorkspace];
@@ -256,29 +156,41 @@ function renderActiveWorkspace() {
   elements.workspaceTitle.textContent = metadata.title;
   elements.workspaceDescription.textContent = metadata.description;
   if (activeWorkspace === "logs") {
-    loadAudit();
+    workspaceData.loadAudit();
   } else if (activeWorkspace === "brain") {
-    loadBrain();
+    workspaceData.loadBrain();
+  } else if (activeWorkspace === "automations") {
+    workspaceData.loadAutomations();
   }
   renderWorkspace(elements.workspaceContent, activeWorkspace, snapshot, {
     onRelay: (id, action) => { void executeRelayCommand(id, action); },
     onTestLed: (value) => { void executeTestLedCommand(value); },
     onMode: (mode) => { void executeModeCommand(mode); },
-    onOta: (version) => { void executeOtaCommand(version); },
     onSettings: openExperienceDialog,
+    onOta: (version) => { void executeOtaCommand(version); },
     auditState: {
-      payload: auditPayload,
-      loading: auditLoading,
-      error: auditError,
-      onRefresh: () => loadAudit(true)
+      payload: workspaceData.auditPayload,
+      loading: workspaceData.auditLoading,
+      error: workspaceData.auditError,
+      onRefresh: () => workspaceData.loadAudit(true)
     },
     brainState: {
-      payload: brainPayload,
-      loading: brainLoading,
-      error: brainError,
-      wakeInFlight: brainWakeInFlight,
-      onRefresh: () => loadBrain(true),
-      onWake: () => executeWakeBrain()
+      payload: workspaceData.brainPayload,
+      loading: workspaceData.brainLoading,
+      error: workspaceData.brainError,
+      wakeInFlight: workspaceData.brainWakeInFlight,
+      onRefresh: () => workspaceData.loadBrain(true),
+      onWake: () => workspaceData.executeWakeBrain()
+    },
+    automationsState: {
+      payload: workspaceData.automationsPayload,
+      loading: workspaceData.automationsLoading,
+      error: workspaceData.automationsError,
+      runInFlight: workspaceData.automationRunInFlight,
+      saveInFlight: workspaceData.automationSaveInFlight,
+      onRefresh: () => workspaceData.loadAutomations(true),
+      onRun: (/** @type {string} */ id) => workspaceData.runAutomation(id),
+      onSave: (/** @type {string} */ id, /** @type {import("./core/domain").AutomationDefinition} */ definition) => workspaceData.saveAutomation(id, definition)
     }
   });
 }
@@ -773,6 +685,7 @@ function destroyRuntime() {
   presenceCommands.destroy();
   presenceView.destroy();
   void soundEngine.destroy();
+  workspaceData.destroy();
 }
 
 void init();

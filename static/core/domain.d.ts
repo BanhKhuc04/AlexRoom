@@ -92,6 +92,84 @@ export interface BrainStatus {
   hardware_verified: boolean;
 }
 
+export type AutomationTrigger =
+  | { type: "manual" }
+  | { type: "time"; at: string }
+  | { type: "device_state" }
+  | { type: "heartbeat_offline" };
+
+/** Trigger types supported by the create/edit UI in Phase 0.7.3. */
+export type EditableTriggerType = "manual" | "time";
+
+export type AutomationCondition =
+  | { type: "node_connection"; equals: string }
+  | { type: "reported_state"; target: string; field: string; equals: JsonValue };
+
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+export interface AutomationAction {
+  node_id?: string;
+  target: string;
+  action: string;
+  value?: JsonValue;
+}
+
+export type AutomationBlockedReason =
+  | "rule_disabled"
+  | "trigger_not_matched"
+  | "conditions_not_met"
+  | "safety_policy_denied"
+  | null;
+
+export type MissionStatus = "running" | "completed" | "partial" | "failed";
+
+export interface MissionStep {
+  index: number;
+  target: string | null;
+  action: string | null;
+  status: string;
+  command_id: string | null;
+  failure_reason: string | null;
+  safety_decision: { allowed: boolean; reason: string | null; } | null;
+  started_at: string;
+  completed_at: string | null;
+}
+
+export interface MissionResult {
+  mission_id: string;
+  name: string;
+  status: MissionStatus;
+  started_at: string;
+  completed_at: string | null;
+  steps: MissionStep[];
+  source: string;
+}
+
+export interface AutomationDefinition {
+  name: string;
+  enabled: boolean;
+  trigger: AutomationTrigger;
+  conditions: AutomationCondition[];
+  actions: AutomationAction[];
+  source?: string;
+}
+
+export interface AutomationRecord extends AutomationDefinition {
+  id: string;
+  updated_at?: string;
+  lastEvaluation?: string;
+  lastRun?: string;
+  blockedReason?: AutomationBlockedReason;
+  result?: MissionStatus;
+  duration?: number;
+}
+
+export interface AutomationRunResult {
+  matched: boolean;
+  blocked_reason: AutomationBlockedReason;
+  mission: MissionResult | null;
+  evaluation: AutomationRecord;
+}
 
 export interface OtaState {
   operation_id: string;

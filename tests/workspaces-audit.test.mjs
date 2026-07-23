@@ -73,8 +73,12 @@ test("renderLogs outputs error state", () => {
 });
 
 test("cached audit refetch behavior (source analysis)", async () => {
+  // Audit logic now lives in WorkspaceDataController
+  const wdcSource = await readFile(new URL("../static/core/workspace-data.js", import.meta.url), "utf8");
+  assert.match(wdcSource, /if \(!force && \(this\.auditPayload \|\| this\.auditError\)\) return;/);
+  assert.match(wdcSource, /if \(this\.auditLoading\) return;/);
+
+  // app.js delegates
   const appSource = await readFile(new URL("../static/app.js", import.meta.url), "utf8");
-  assert.match(appSource, /if \(!force && \(auditPayload \|\| auditError\)\) return;/);
-  assert.match(appSource, /if \(auditLoading\) return;/);
-  assert.match(appSource, /onRefresh:\s*\(\)\s*=>\s*loadAudit\(true\)/);
+  assert.match(appSource, /workspaceData\.loadAudit\(true\)/);
 });
