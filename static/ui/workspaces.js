@@ -12,6 +12,7 @@ export const WORKSPACES = Object.freeze({
   energy: { eyebrow: "ENERGY INTELLIGENCE / FOUNDATION", title: "Năng lượng", description: "Chưa có meter thật; không hiển thị số liệu demo như dữ liệu đo." },
   brain: { eyebrow: "COMPUTE NODE / FOUNDATION", title: "ALEX Brain", description: "Wake-on-LAN và telemetry PC chưa có trong backend gốc." },
   logs: { eyebrow: "AUDIT CHANNEL / LIVE", title: "Nhật ký", description: "Sự kiện gần nhất do Alex Core cung cấp trong memory." },
+  backup: { eyebrow: "DATA ARCHIVE / FOUNDATION", title: "Sao lưu", description: "Lịch sử snapshot và an toàn dữ liệu ALEX." },
   system: { eyebrow: "ALEX CORE / LIVE METRICS", title: "Hệ thống", description: "Tài nguyên thật từ host đang chạy FastAPI." },
   settings: { eyebrow: "SYSTEM PREFERENCES / LOCAL", title: "Cài đặt", description: "Cấu hình chất lượng và chuyển động được lưu trên trình duyệt này." },
 });
@@ -589,12 +590,99 @@ function renderFoundation(workspace) {
   return `<div class="overview-grid feature-empty"><article class="workspace-panel"><span class="panel-caption-inline">${details[1]}</span><h2>${details[0]}</h2><p>${details[2]}</p><div class="phase-notice"><b>HONEST STATE</b><span>UI chỉ hiển thị dữ liệu có nguồn. Tính năng cần backend/hardware được khóa thay vì báo thành công mô phỏng.</span></div><button class="secondary-action" type="button" disabled>${details[3]}</button></article><article class="workspace-panel"><h2>Trạng thái tích hợp</h2><dl class="integration-list"><div><dt>LOCAL UI</dt><dd>READY</dd></div><div><dt>BACKEND CONTRACT</dt><dd>PENDING</dd></div><div><dt>HARDWARE</dt><dd>NOT VERIFIED</dd></div></dl></article></div>`;
 }
 
-/** @param {SystemSnapshot | null} snapshot */
-function renderScenes(snapshot) {
-  const current = snapshot?.device.mode ?? "home";
-  const modes = ["home", "study", "sleep", "away", "relax", "energy saving"];
-  return `<article class="workspace-panel"><h2>Room modes</h2><p>Mode hiện tại: <b>${escapeHtml(current.toUpperCase())}</b>. Home, Study, Sleep và Away chỉ cập nhật ngữ cảnh logic; không mode nào được phép gửi lệnh đến bốn relay chưa xác minh.</p><div class="relay-grid">${modes.map((mode) => { const supported = ["home", "study", "sleep", "away"].includes(mode); return `<article class="relay-card"><header><div><span>${supported ? "LOGICAL ROOM MODE" : "SCENE DRAFT"}</span><h3>${mode.toUpperCase()}</h3><p>${mode === current ? "Đang hoạt động · không relay" : supported ? "Không thực thi relay" : "Chưa có backend steps"}</p></div><b class="relay-state ${mode === current ? "on" : ""}">${mode === current ? "ACTIVE" : supported ? "LOGIC ONLY" : "LOCKED"}</b></header><div class="relay-actions"><button type="button" ${supported ? `data-room-mode="${mode}"` : "disabled"}>${supported ? "KÍCH HOẠT" : "CHƯA KHẢ DỤNG"}</button></div></article>`; }).join("")}</div></article>`;
+/** @param {BackupWorkspaceState | undefined} state */
+export function renderBackup(state) {
+  if (!state) return `<article class="workspace-panel"><h2>Backup</h2><p class="loading-state">Chưa khởi tạo state.</p></article>`;
+  if (state.loading && !state.payload) {
+    return `<div class="overview-grid feature-empty"><article class="workspace-panel"><h2>Sao lưu</h2><span class="syncing">Đang tải...</span></article></div>`;
+  }
+  if (!state.payload && state.error) {
+    return `<div class="overview-grid feature-empty"><article class="workspace-panel"><h2>Lỗi Tải Sao Lưu</h2><p class="status-critical">${escapeHtml(state.error)}</p><button class="secondary-action" type="button" data-refresh-backup>THỬ LẠI</button></article></div>`;
+  }
+  if (!state.payload) {
+    return `<div class="overview-grid feature-empty"><article class="workspace-panel"><h2>Sao lưu</h2><p>Chưa có dữ liệu.</p></article></div>`;
+  }
+
+  const { items, retention, directory } = state.payload;
+  let inlineErrorHtml = "";
+  if (state.error) {
+    inlineErrorHtml = `<div class="status-badge status-critical" style="margin-bottom: 1rem;">${escapeHtml(state.error)} <button type="button" data-refresh-backup class="secondary-action" style="margin-left: 1rem;">THỬ LẠI</button></div>`;
+  }
+
+  const latest = items.length > 0 ? items[0] : null;
+  const historyHtml = items.map((b) => {
+    const isOk = b.integrity === 'ok';
+    return `<tr>
+      <td>${escapeHtml(b.created_at ?? b.file)}</td>
+      <td>${Math.round(b.size_bytes / 1024)} KB</td>
+      <td><b class="${isOk ? 'status-emerald' : 'status-critical'}">${escapeHtml(b.integrity.toUpperCase())}</b></td>
+    </tr>`;
+  }).join("");
+
+  return `
+    ${inlineErrorHtml}
+    <div class="overview-grid">
+      <article class="workspace-panel">
+        <h2>Latest Backup</h2>
+        ${latest ? `
+        <dl class="integration-list">
+          <div><dt>CREATED</dt><dd>${escapeHtml(latest.created_at ?? latest.file)}</dd></div>
+          <div><dt>INTEGRITY</dt><dd><b class="${latest.integrity === 'ok' ? 'status-emerald' : 'status-critical'}">${escapeHtml(latest.integrity.toUpperCase())}</b></dd></div>
+          <div><dt>SIZE</dt><dd>${Math.round(latest.size_bytes / 1024)} KB</dd></div>
+          <div><dt>CHECKSUM</dt><dd>${latest.sha256 ? escapeHtml(latest.sha256.substring(0, 12) + "...") : "N/A"}</dd></div>
+          <div><dt>SOURCE DB</dt><dd>${escapeHtml(latest.source_database ?? "?")}</dd></div>
+        </dl>
+        ` : `<p>Chưa có bản sao lưu nào.</p>`}
+        <div class="card-actions" style="margin-top: 1.5rem">
+          <button type="button" class="primary-action" data-create-backup ${state.createInFlight ? "disabled" : ""}>${state.createInFlight ? "ĐANG TẠO..." : "BACKUP NOW"}</button>
+          <button type="button" class="secondary-action" data-refresh-backup>REFRESH</button>
+        </div>
+      </article>
+
+      <article class="workspace-panel">
+        <h2>Backup History</h2>
+        <p>Retention: ${retention} bản · Thư mục: ${escapeHtml(directory)}</p>
+        ${items.length > 0 ? `
+        <table style="width:100%; text-align:left; margin-top:1rem; border-collapse: collapse;">
+          <thead>
+            <tr>
+              <th style="padding: 0.5rem 0; border-bottom: 1px solid var(--alex-text-dim);">Timestamp</th>
+              <th style="padding: 0.5rem 0; border-bottom: 1px solid var(--alex-text-dim);">Size</th>
+              <th style="padding: 0.5rem 0; border-bottom: 1px solid var(--alex-text-dim);">Integrity</th>
+            </tr>
+          </thead>
+          <tbody>${historyHtml}</tbody>
+        </table>
+        ` : ""}
+      </article>
+    </div>
+  `;
 }
+/**
+ * @typedef {Object} BackupWorkspaceState
+ * @property {import("../core/domain").BackupHistoryPayload | null} payload
+ * @property {boolean} loading
+ * @property {string | null} error
+ * @property {boolean} createInFlight
+ * @property {() => void} onRefresh
+ * @property {() => Promise<boolean>} onCreate
+ */
+
+/**
+ * @typedef {Object} ScenesWorkspaceState
+ * @property {import("../core/domain").SceneRecord[] | null} payload
+ * @property {boolean} loading
+ * @property {string | null} error
+ * @property {Set<string>} saveInFlight
+ * @property {() => void} onRefresh
+ * @property {(id: string, definition: import("../core/domain").SceneDefinition) => Promise<boolean>} onSave
+ */
+
+/** 
+ * @param {{ snapshot: SystemSnapshot | null, state?: ScenesWorkspaceState | undefined }} props
+ */
+
+
 /** @param {import("../core/domain").MissionDefinition} mission */
 function isEditableMission(mission) {
   if (!Array.isArray(mission.steps) || mission.steps.length === 0) return false;
@@ -759,7 +847,7 @@ export function renderMissions(state) {
  * @param {HTMLElement} container
  * @param {string} workspace
  * @param {SystemSnapshot | null} snapshot
- * @param {{onRelay: (id: number, action: "ON" | "OFF") => void, onTestLed: (value: boolean) => void, onMode: (mode: import("../core/domain").RoomMode) => void, onSettings: () => void, onOta?: (version: string) => void, auditState?: any, brainState?: any, automationsState?: any, missionsState?: any}} actions
+ * @param {{onRelay: (id: number, action: "ON" | "OFF") => void, onTestLed: (value: boolean) => void, onMode: (mode: import("../core/domain").RoomMode) => void, onSettings: () => void, onOta?: (version: string) => void, auditState?: any, brainState?: any, automationsState?: any, missionsState?: any, backupState?: BackupWorkspaceState, scenesState?: ScenesWorkspaceState}} actions
  */
 export function renderWorkspace(container, workspace, snapshot, actions) {
   if (workspace === "overview") container.innerHTML = renderOverview(snapshot);
@@ -769,6 +857,23 @@ export function renderWorkspace(container, workspace, snapshot, actions) {
     const refreshBtn = container.querySelector("[data-refresh-audit]");
     if (refreshBtn && actions.auditState?.onRefresh) {
       refreshBtn.addEventListener("click", () => actions.auditState.onRefresh());
+    }
+  }
+  else if (workspace === "backup") {
+    const backupState = actions.backupState;
+    container.innerHTML = renderBackup(backupState);
+    const refreshBtn = container.querySelector("[data-refresh-backup]");
+    const createBtns = container.querySelectorAll("[data-create-backup]");
+    if (refreshBtn && backupState?.onRefresh) {
+      refreshBtn.addEventListener("click", () => backupState.onRefresh());
+    }
+    if (backupState?.onCreate) {
+      createBtns.forEach(btn => {
+        btn.addEventListener("click", () => {
+          if (!(btn instanceof HTMLButtonElement)) return;
+          backupState.onCreate();
+        });
+      });
     }
   }
   else if (workspace === "brain") {
@@ -1189,7 +1294,7 @@ export function renderWorkspace(container, workspace, snapshot, actions) {
     }
   }
   else if (workspace === "system") container.innerHTML = renderSystem(snapshot);
-  else if (workspace === "scenes") container.innerHTML = renderScenes(snapshot);
+
   else if (workspace === "settings") container.innerHTML = `<article class="workspace-panel"><h2>Experience settings</h2><p>Điều chỉnh performance/balanced/cinematic, reduced motion và sound modes/gain groups.</p><button class="primary-action" type="button" data-open-experience>MỞ CÀI ĐẶT</button></article>`;
   else container.innerHTML = renderFoundation(workspace);
 

@@ -163,13 +163,15 @@ function renderActiveWorkspace() {
     workspaceData.loadAutomations();
   } else if (activeWorkspace === "missions") {
     workspaceData.loadMissions();
+  } else if (activeWorkspace === "backup") {
+    workspaceData.loadBackups();
   }
   renderWorkspace(elements.workspaceContent, activeWorkspace, snapshot, {
-    onRelay: (id, action) => { void executeRelayCommand(id, action); },
-    onTestLed: (value) => { void executeTestLedCommand(value); },
-    onMode: (mode) => { void executeModeCommand(mode); },
+    onRelay: (/** @type {number} */ id, /** @type {"ON" | "OFF"} */ action) => { void executeRelayCommand(id, action); },
+    onTestLed: (/** @type {boolean} */ value) => { void executeTestLedCommand(value); },
+    onMode: (/** @type {import("./core/domain").RoomMode} */ mode) => { void executeModeCommand(mode); },
     onSettings: openExperienceDialog,
-    onOta: (version) => { void executeOtaCommand(version); },
+    onOta: (/** @type {string} */ version) => { void executeOtaCommand(version); },
     auditState: {
       payload: workspaceData.auditPayload,
       loading: workspaceData.auditLoading,
@@ -204,6 +206,14 @@ function renderActiveWorkspace() {
       onRefresh: () => workspaceData.loadMissions(true),
       onRun: (/** @type {string} */ id) => workspaceData.runMission(id),
       onSave: (/** @type {string} */ id, /** @type {import("./core/domain").MissionDefinition} */ definition) => workspaceData.saveMission(id, definition)
+    },
+    backupState: {
+      payload: workspaceData.backupPayload,
+      loading: workspaceData.backupLoading,
+      error: workspaceData.backupError,
+      createInFlight: workspaceData.backupCreateInFlight,
+      onRefresh: () => workspaceData.loadBackups(true),
+      onCreate: () => workspaceData.createBackup()
     }
   });
 }

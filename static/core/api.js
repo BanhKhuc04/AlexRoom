@@ -216,6 +216,7 @@ export class AlexApi {
     return /** @type {Promise<{items: import("./domain").MissionRunRecord[], source: string}>} */ (this.request("/api/v1/mission_runs"));
   }
 
+
   /**
    * @param {string} id
    * @param {import("./domain").MissionDefinition} definition
@@ -240,4 +241,21 @@ export class AlexApi {
       body: JSON.stringify({})
     }));
   }
+
+  /**
+   * @returns {Promise<import("./domain").BackupHistoryPayload>}
+   */
+  async getBackups() {
+    return /** @type {Promise<import("./domain").BackupHistoryPayload>} */ (this.request("/api/v1/backups"));
+  }
+
+  /**
+   * @returns {Promise<{backup: import("./domain").BackupRecord}>}
+   */
+  async createBackup() {
+    return /** @type {Promise<{backup: import("./domain").BackupRecord}>} */ (this.request("/api/v1/backup", {
+      method: "POST"
+    }));
+  }
+
 }

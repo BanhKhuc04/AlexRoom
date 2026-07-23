@@ -276,3 +276,20 @@ export interface V1Command {
     capability: CapabilityStatus | null;
   };
 }
+
+// --- Backup State ---
+export interface BackupRecord {
+  file: string;
+  metadata_file: string;
+  size_bytes: number;
+  sha256: string;
+  integrity: string;
+  created_at?: string;
+  source_database?: string;
+}
+
+export interface BackupHistoryPayload {
+  items: BackupRecord[];
+  retention: number;
+  directory: string;
+}

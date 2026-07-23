@@ -71,6 +71,14 @@ export class WorkspaceDataController {
     this.missionRunInFlight = new Set();
     /** @type {Set<string>} */
     this.missionSaveInFlight = new Set();
+
+    // Backup State
+    /** @type {import("./domain").BackupHistoryPayload | null} */
+    this.backupPayload = null;
+    this.backupLoading = false;
+    /** @type {string | null} */
+    this.backupError = null;
+    this.backupCreateInFlight = false;
   }
 
   // === LIFECYCLE ===
@@ -292,5 +300,52 @@ export class WorkspaceDataController {
       this.missionRunInFlight.delete(id);
       this._notify();
     });
+  }
+
+  // === BACKUP ===
+  /**
+   * @param {boolean} force
+   */
+  loadBackups(force = false) {
+    if (this._destroyed) return;
+    if (this.backupLoading) return;
+    if (!force && (this.backupPayload !== null || this.backupError !== null)) return;
+
+    this.backupLoading = true;
+    this.backupError = null;
+    this._notify();
+
+    this.api.getBackups().then((payload) => {
+      if (this._destroyed) return;
+      this.backupPayload = payload;
+      this.backupLoading = false;
+      this._notify();
+    }).catch((error) => {
+      if (this._destroyed) return;
+      console.error("Backup load failed", error);
+      this.backupError = "Loi khi tai du lieu Backup.";
+      this.backupLoading = false;
+      this._notify();
+    });
+  }
+
+  async createBackup() {
+    if (this.backupCreateInFlight) return false;
+    this.backupCreateInFlight = true;
+    this.backupError = null;
+    this._notify();
+
+    try {
+      await this.api.createBackup();
+      this.loadBackups(true);
+      return true;
+    } catch (err) {
+      console.error("Create backup failed", err);
+      this.backupError = "Loi khi tao backup.";
+      return false;
+    } finally {
+      this.backupCreateInFlight = false;
+      this._notify();
+    }
   }
 }
