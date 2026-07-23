@@ -1,5 +1,61 @@
 # Changelog
 
+# ALEX NEXUS OS v0.8.0 — Brain Text Intelligence
+
+Previous version: 0.7.0
+Commits included: 2
+
+## Summary
+
+- Added a standalone ALEX Brain text service with Ollama-native
+  `qwen3.5:4b` provider support.
+- Brain proposes only strict structured tools; ALEX Core remains the final
+  execution authority and validates the complete response before execution.
+- Added separate server-to-server Brain authentication and bounded provider,
+  client, request, response, and tool-call validation.
+- Added authoritative Core reads for system status and the device/capability
+  registry.
+- Added verified `test_led` mutation through the immutable
+  `esp01/test_led/set` mapping, `CommandGateway`, and `SafetyPolicy`.
+- Added stored safe mission execution with exact `brain_allowed` checks,
+  enabled-state checks, and whole-mission safety preflight.
+- Added stored safe automation execution with authoritative action resolution
+  and whole-automation safety preflight.
+- Added logical-only room modes: `home`, `away`, `sleep`, and `study`.
+- Added refusal hardening, exact duplicate-call replay rejection, bounded
+  identifiers, and log-injection protection.
+- Core remains functional when Brain is disabled, unavailable, or offline.
+- `relay_1` through `relay_4` remain restricted and unavailable to Brain.
+
+## Security boundaries
+
+This release does not include:
+
+- STT, TTS, or wake-word support.
+- Relay enablement.
+- Generic MQTT publish, GPIO, shell, or arbitrary hardware tools.
+- Direct Brain authority over MQTT, hardware, missions, automations, or room
+  state.
+
+## Validation evidence
+
+- C8 full security, architecture, diff, and acceptance audit: PASS.
+- C9A local real-AI six-tool acceptance with Ollama `qwen3.5:4b`: PASS.
+- Frontend tests: 110 PASS.
+- Backend tests: 518 PASS, 3 skipped, 259 subtests PASS.
+- Focused safety, orchestration, and app-safety tests: 31 PASS.
+- Ten-case authoritative simulator matrix: PASS, including pre-execution
+  rejection of unsafe relay mission and automation records.
+- Phase 0.8 Python module compilation and `git diff --check`: PASS.
+
+No Orange Pi production deployment or production acceptance is claimed for
+this release candidate.
+
+## Commits
+
+- feat(brain): add structured Brain text intelligence (`1ded367`)
+- test(brain): add Phase 0.8 safety and integration coverage (`5b9ff20`)
+
 # ALEX v0.7.0
 
 Previous version: 0.6.0
