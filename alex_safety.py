@@ -251,6 +251,15 @@ class GatewayResult:
         }
 
 
+class GatewayExecutionError(RuntimeError):
+    """Authorized gateway request that could not create a command."""
+
+    def __init__(self, reason: str, decision: SafetyDecision) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.decision = decision
+
+
 class CommandGateway:
     """The single runtime entry point for commands that can reach a device."""
 
@@ -293,7 +302,14 @@ class CommandGateway:
                     SafetyDecision(**{**decision.as_dict(), "allowed": False, "reason": "invalid_boolean_payload"})
                 )
             source = "simulated" if self.policy.execution_mode == "simulator" else "local_software"
-            command = self.command_service._create_test_led_command(value, origin, source)
+            try:
+                command = self.command_service._create_test_led_command(
+                    value,
+                    origin,
+                    source,
+                )
+            except RuntimeError as error:
+                raise GatewayExecutionError(str(error), decision) from error
             return GatewayResult(decision, command)
 
         return self._denied_result(

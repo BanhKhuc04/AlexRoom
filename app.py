@@ -32,6 +32,17 @@ from alex_hardware import (
 from alex_simulator import Esp01Simulator
 from alex_orchestration import AutomationExecutor, AutomationScheduler, MissionExecutor
 from alex_brain import BrainService
+from alex_brain_client import BrainClientError, CoreBrainClient, CoreBrainConfig
+from alex_brain_automations import StoredSafeAutomationExecutor
+from alex_brain_integration import (
+    C7_EXECUTION_ALLOWLIST,
+    CoreBrainChatResponse,
+    CoreBrainIntegration,
+)
+from alex_brain_missions import StoredSafeMissionExecutor
+from alex_brain_mutations import CommandGatewaySetTestLedExecutor
+from alex_brain_room_mode import AuthoritativeRoomModeExecutor, RoomMode
+from alex_brain_tools import BrainChatRequest
 from alex_safety import CapabilityRegistry, CommandGateway, GatewayResult, SafetyDecision, SafetyPolicy
 from alex_ota import AlexOtaService
 from alex_version import ALEX_VERSION
@@ -77,6 +88,7 @@ MUTATION_RATE_LIMIT = int(os.getenv("ALEX_MUTATION_RATE_LIMIT", "30"))
 BRAIN_MAC = os.getenv("ALEX_BRAIN_MAC")
 BRAIN_HOST = os.getenv("ALEX_BRAIN_HOST")
 BRAIN_PORT = int(os.getenv("ALEX_BRAIN_PORT", "22"))
+CORE_BRAIN_CONFIG = CoreBrainConfig.from_env(os.environ)
 
 DEVICE_ID = "esp01"
 TOPIC_PREFIX = f"alex/device/{DEVICE_ID}"
@@ -197,6 +209,48 @@ def add_event(
             print(f"SQLite audit write failed: {error}")
 
 
+def _audit_core_brain(
+    stage: str,
+    level: str,
+    details: dict[str, object],
+) -> None:
+    messages = {
+        "request_accepted": "Core accepted an authenticated Brain chat request",
+        "request_failed": "Core Brain request failed safely",
+        "response_received": "Core received and validated a Brain response",
+        "policy_rejected": "Core rejected a Brain proposal under checkpoint policy",
+        "read_execution": "Core started an authoritative Brain read tool",
+        "read_result": "Core completed an authoritative Brain read tool",
+        "mutation_validated": "Core validated a Brain test LED proposal",
+        "fixed_mapping_selected": "Core selected the fixed test LED target",
+        "safety_decision": "Core safety gateway evaluated a Brain mutation",
+        "mutation_result": "Core recorded the authoritative command lifecycle",
+        "mission_proposal_validated": "Core validated a stored mission proposal",
+        "mission_lookup": "Core looked up the authoritative mission record",
+        "mission_brain_allowed": "Core evaluated mission Brain authorization",
+        "mission_enabled_state": "Core evaluated mission enabled state",
+        "mission_preflight": "Core completed whole-mission safety preflight",
+        "mission_execution_start": "Core started the existing mission executor",
+        "mission_execution_outcome": "Core recorded authoritative mission outcome",
+        "automation_proposal_validated": "Core validated a stored automation proposal",
+        "automation_lookup": "Core looked up the authoritative automation record",
+        "automation_brain_allowed": "Core evaluated automation Brain authorization",
+        "automation_enabled_state": "Core evaluated automation enabled state",
+        "automation_resolution": "Core resolved stored automation actions",
+        "automation_preflight": "Core completed automation safety preflight",
+        "automation_execution_start": "Core started existing automation orchestration",
+        "automation_execution_outcome": "Core recorded authoritative automation outcome",
+        "room_mode_validated": "Core validated a logical room-mode proposal",
+        "room_mode_result": "Core recorded authoritative logical room-mode state",
+    }
+    add_event(
+        "brain_chat",
+        messages.get(stage, "Core Brain integration event"),
+        level,
+        {"stage": stage, **details},
+    )
+
+
 def load_config() -> dict[str, Any]:
     if not CONFIG_PATH.exists():
         save_config(DEFAULT_CONFIG)
@@ -309,6 +363,7 @@ mission_executor = MissionExecutor(store, command_gateway)
 automation_executor = AutomationExecutor(store, mission_executor, command_gateway)
 automation_scheduler = AutomationScheduler(store, automation_executor, realtime_hub)
 brain_service = BrainService(store, realtime_hub, BRAIN_MAC, BRAIN_HOST, BRAIN_PORT)
+core_brain_client = CoreBrainClient(CORE_BRAIN_CONFIG)
 ota_service = AlexOtaService(
     store=store,
     publisher=_publish_ota_command,
@@ -807,19 +862,24 @@ def set_mode(
     payload: ModeRequest,
     _: None = Depends(require_mutation_budget),
 ) -> dict[str, Any]:
-    mode = payload.mode.lower()
+    return _set_authoritative_room_mode(payload.mode.lower())
+
+
+def _set_authoritative_room_mode(mode: RoomMode | str) -> dict[str, Any]:
     allowed = {"home", "away", "sleep", "study"}
 
     if mode not in allowed:
         raise HTTPException(status_code=400, detail="Chế độ không hợp lệ")
 
     with state_lock:
+        previous_mode = device_state["mode"]
         device_state["mode"] = mode
 
     add_event("mode", f"Đã cập nhật room mode logic: {mode}; không gửi relay", "success")
     return {
         "accepted": True,
         "mode": mode,
+        "previous_mode": previous_mode,
         "logical_mode_updated": True,
         "physical_actions": [],
         "physical_result": "not_requested_restricted_capabilities",
@@ -828,6 +888,10 @@ def set_mode(
 
 @app.get("/api/v1/status")
 def v1_status() -> dict[str, Any]:
+    return _authoritative_system_status()
+
+
+def _authoritative_system_status() -> dict[str, Any]:
     node_truth = capability_registry.get_node_status(DEVICE_ID)
     if node_truth is None:
         raise HTTPException(status_code=503, detail="ESP01 chưa có trong capability registry")
@@ -853,6 +917,10 @@ def v1_safety_capabilities() -> dict[str, Any]:
 
 @app.get("/api/v1/devices")
 def v1_devices() -> dict[str, Any]:
+    return _authoritative_device_list()
+
+
+def _authoritative_device_list() -> dict[str, Any]:
     node_truth = capability_registry.get_node_status(DEVICE_ID)
     if node_truth is None:
         raise HTTPException(status_code=503, detail="ESP01 chưa có trong capability registry")
@@ -869,6 +937,32 @@ def v1_devices() -> dict[str, Any]:
     existing_reported["relays"] = relay_state
     v1_device["reported_state"] = existing_reported
     return {"items": [v1_device], "simulator": ALEX_SIMULATOR}
+
+
+core_brain_mission_executor = StoredSafeMissionExecutor(
+    store,
+    mission_executor,
+    command_gateway,
+)
+core_brain_automation_executor = StoredSafeAutomationExecutor(
+    store,
+    automation_executor,
+    command_gateway,
+)
+core_brain_room_mode_executor = AuthoritativeRoomModeExecutor(
+    _set_authoritative_room_mode,
+)
+core_brain_integration = CoreBrainIntegration(
+    core_brain_client,
+    system_status_reader=_authoritative_system_status,
+    device_list_reader=_authoritative_device_list,
+    audit=_audit_core_brain,
+    execution_allowlist=C7_EXECUTION_ALLOWLIST,
+    set_test_led_executor=CommandGatewaySetTestLedExecutor(command_gateway),
+    safe_mission_executor=core_brain_mission_executor,
+    safe_automation_executor=core_brain_automation_executor,
+    room_mode_executor=core_brain_room_mode_executor,
+)
 
 
 @app.post("/api/v1/commands")
@@ -975,6 +1069,27 @@ def v1_audit(limit: int = 80) -> dict[str, Any]:
 @app.get("/api/v1/brain")
 def v1_brain() -> dict[str, Any]:
     return brain_service.status()
+
+
+@app.post("/api/v1/brain/chat", response_model=CoreBrainChatResponse)
+def v1_brain_chat(
+    payload: BrainChatRequest,
+    _: None = Depends(require_api_key),
+) -> CoreBrainChatResponse:
+    try:
+        return core_brain_integration.chat(payload)
+    except BrainClientError as error:
+        status_codes = {
+            "brain_disabled": 503,
+            "brain_not_configured": 503,
+            "brain_unavailable": 503,
+            "brain_timeout": 504,
+            "invalid_brain_response": 502,
+        }
+        raise HTTPException(
+            status_code=status_codes.get(error.code, 503),
+            detail={"code": error.code},
+        ) from None
 
 
 @app.post("/api/v1/brain/wake")
