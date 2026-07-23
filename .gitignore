@@ -3,6 +3,10 @@ node_modules/
 dist/
 __pycache__/
 *.pyc
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
 config.json
 data/*.db*
 backups/*.db
