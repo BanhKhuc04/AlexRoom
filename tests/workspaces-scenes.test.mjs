@@ -188,7 +188,11 @@ test("renderScenes - editor eligibility and HTML rendering", async () => {
       { id: "s3", name: "Custom payload read only", source: "local", steps: [{ node_id: "esp01", target: "test_led", action: "set", value: true, payload: { value: false } }] },
       { id: "s4", name: "Unknown target read only", source: "local", steps: [{ node_id: "esp01", target: "other", action: "set", value: true }] },
       { id: "s5", name: "Malformed collection read only", source: "local", steps: {} },
-      { id: "s6", name: "XSS <script>alert(1)</script>", source: "local", steps: [] }
+      { id: "s6", name: "XSS <script>alert(1)</script>", source: "local", steps: [] },
+      { id: "home", name: "Home", safety_level: "safe", steps: [], execution: "backend_mode_contract" },
+      { id: "s8", name: "Unknown top-level metadata", source: "local", steps: [], unknown_field: 123 },
+      { id: "s9", name: "Unknown step field", source: "local", steps: [{ node_id: "esp01", target: "test_led", action: "set", value: true, extra: 1 }] },
+      { id: "missing_steps", name: "Missing Steps", source: "local" }
     ],
     loading: false, error: null, saveInFlight: new Set()
   };
@@ -207,10 +211,14 @@ test("renderScenes - editor eligibility and HTML rendering", async () => {
   assert.doesNotMatch(html, /data-edit-scene="s3"/); // s3 restricted
   assert.doesNotMatch(html, /data-edit-scene="s4"/); // s4 restricted
   assert.doesNotMatch(html, /data-edit-scene="s5"/); // s5 restricted
+  assert.doesNotMatch(html, /data-edit-scene="home"/); // home has backend metadata
+  assert.doesNotMatch(html, /data-edit-scene="s8"/); // unknown top-level metadata
+  assert.doesNotMatch(html, /data-edit-scene="s9"/); // unknown step field
+  assert.doesNotMatch(html, /data-edit-scene="missing_steps"/); // missing steps
 
-  // ADVANCED / READ ONLY should appear three times
+  // ADVANCED / READ ONLY should appear for restricted ones
   const readOnlyMatches = html.match(/ADVANCED \/ READ ONLY/g);
-  assert.ok(readOnlyMatches && readOnlyMatches.length === 3);
+  assert.ok(readOnlyMatches && readOnlyMatches.length === 7);
 
   // RESTRICTED HARDWARE badge for relay target
   assert.match(html, /RESTRICTED HARDWARE/);

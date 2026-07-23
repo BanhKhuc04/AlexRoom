@@ -783,12 +783,22 @@ function renderScenes({ snapshot, state }) {
   return html;
 }
 
-/** @param {import("../core/domain").SceneDefinition} scene */
+/** @param {import("../core/domain").SceneRecord | import("../core/domain").SceneDefinition} scene */
 function isEditableScene(scene) {
-  if (scene.steps === undefined) return true;
+  if (!scene || typeof scene !== "object") return false;
   if (!Array.isArray(scene.steps)) return false;
+  const allowedTopLevel = ["id", "name", "source", "steps", "updated_at"];
+  for (const key of Object.keys(scene)) {
+    if (!allowedTopLevel.includes(key)) return false;
+  }
+
+  const allowedStepFields = ["node_id", "target", "action", "value"];
   for (const step of scene.steps) {
-    if (step.node_id !== "esp01" || step.target !== "test_led" || step.action !== "set" || typeof step.value !== "boolean" || "payload" in step) {
+    if (!step || typeof step !== "object") return false;
+    for (const key of Object.keys(step)) {
+      if (!allowedStepFields.includes(key)) return false;
+    }
+    if (step.node_id !== "esp01" || step.target !== "test_led" || step.action !== "set" || typeof step.value !== "boolean") {
       return false;
     }
   }

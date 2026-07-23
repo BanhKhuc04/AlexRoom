@@ -1049,6 +1049,15 @@ def v1_put_domain(
             for field in _RUNTIME_FIELDS:
                 if field in existing:
                     body[field] = existing[field]
+    elif domain == "scenes":
+        _SCENE_METADATA = {"safety_level", "execution", "risk_level"}
+        existing = store.get_record("scenes", record_id)
+        for field in _SCENE_METADATA:
+            body.pop(field, None)
+        if existing:
+            for field in _SCENE_METADATA:
+                if field in existing:
+                    body[field] = existing[field]
 
     store.put_record(domain, record_id, body)
     store.add_audit(domain, f"Updated {record_id}", "success")
