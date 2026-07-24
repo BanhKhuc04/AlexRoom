@@ -26,6 +26,7 @@ def test_bounded_audio_transport_success():
         transport = BoundedAudioTransport(stt_provider, router_dispatch)
         
         ws = AsyncMock(spec=WebSocket)
+        ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
         ws.receive.side_effect = [
             {"bytes": b"audio_data"},
             {"text": "DONE"}
@@ -57,6 +58,7 @@ def test_bounded_audio_transport_cancel():
         transport = BoundedAudioTransport(stt_provider, router_dispatch)
         
         ws = AsyncMock(spec=WebSocket)
+        ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
         ws.receive.side_effect = [
             {"bytes": b"audio_data"},
             {"text": "CANCEL"}
@@ -83,6 +85,7 @@ def test_bounded_audio_transport_disconnect():
         transport = BoundedAudioTransport(stt_provider, router_dispatch)
         
         ws = AsyncMock(spec=WebSocket)
+        ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
         ws.receive.side_effect = WebSocketDisconnect()
         ws_state = Mock()
         ws_state.name = "DISCONNECTED"
@@ -104,8 +107,9 @@ def test_bounded_audio_transport_max_chunk_size():
         transport = BoundedAudioTransport(stt_provider, router_dispatch)
         
         ws = AsyncMock(spec=WebSocket)
+        ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
         ws.receive.side_effect = [
-            {"bytes": b"x" * (1024 * 1024 * 3)},
+            {"bytes": b"x" * (1024 * 512 + 1)},
         ]
         ws_state = Mock()
         ws_state.name = "CONNECTED"

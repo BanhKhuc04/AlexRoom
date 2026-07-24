@@ -33,6 +33,7 @@ def test_bare_in_orchestration_pipeline_success():
         transport = BoundedAudioTransport(stt_provider, router_dispatch, tts_provider, playback_sink)
         
         ws = AsyncMock(spec=WebSocket)
+        ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
         ws.receive.side_effect = [
             {"bytes": b"audio_data"},
             {"text": "DONE"}
@@ -77,6 +78,7 @@ def test_bare_in_orchestration_pipeline_no_text():
         transport = BoundedAudioTransport(stt_provider, router_dispatch, tts_provider, playback_sink)
         
         ws = AsyncMock(spec=WebSocket)
+        ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
         ws.receive.side_effect = [
             {"bytes": b"audio_data"},
             {"text": "DONE"}

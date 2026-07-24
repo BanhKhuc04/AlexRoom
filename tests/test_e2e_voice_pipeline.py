@@ -45,6 +45,7 @@ def test_e2e_voice_pipeline():
         
         # Client connects
         ws = AsyncMock(spec=WebSocket)
+        ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
         ws.receive.side_effect = [
             {"bytes": b"fake_audio_chunk_1"},
             {"bytes": b"fake_audio_chunk_2"},

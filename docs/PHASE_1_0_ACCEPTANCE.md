@@ -3,8 +3,15 @@
 ## Architecture & Trust Boundaries
 ALEX Voice architecture (Phase 1.0) is implemented as a bounded software transport layer. It operates entirely outside the trusted Core logic. The Voice layer receives audio, translates it via isolated STT boundaries, passes the resulting text verbatim to `IntelligenceRouter`, and plays back the router's assistant response via TTS boundaries.
 
-- **Audio Transport**: Uses FastAPI WebSockets with explicit API Key authentication (`x-alex-key` query param). Enforces 30s session TTL and 2MB chunk limits.
+- **Audio Transport**: Uses FastAPI WebSockets.
+- **Origin Validation**: Explicit strict validation ensures connection originates only from trusted configured hosts (via `websocket.headers.get("origin")` exact match).
+- **Authentication**: Long-lived API keys are NOT exposed in the URL. A short-timeout first-message protocol requires `{"type": "auth", "api_key": ...}`.
+- **Resource Limits**: 
+  - `MAX_CHUNK_SIZE_BYTES` = 512KB
+  - `MAX_SESSION_BYTES` = 5MB (enforced strictly via rolling byte accumulator)
+  - `MAX_SESSION_DURATION_SECONDS` = 30s
 - **Safety Boundary**: Voice bypasses ZERO security policies. It does NOT publish MQTT directly. All commands route through `IntelligenceRouter` and the canonical `SafetyPolicy`.
+- **WSS Requirement**: Unencrypted local deployments are acceptable only on trusted Tailscale networks. Otherwise, TLS/WSS is strictly required for untrusted networks.
 
 ## Speech-to-Text (STT)
 - **Adapter**: `STTProvider` Protocol implemented.

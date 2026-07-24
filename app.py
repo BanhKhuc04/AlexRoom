@@ -1485,12 +1485,18 @@ except ImportError:
     from unittest.mock import Mock
     voice_playback = Mock()
 
+import hmac
+
+def _validate_alex_api_key(key: str) -> bool:
+    return hmac.compare_digest(key, ALEX_API_KEY)
+
 from alex_voice_transport import BoundedAudioTransport
 bounded_audio_transport = BoundedAudioTransport(
     stt_provider=voice_stt,
     router_dispatch=intelligence_router.dispatch,
     tts_provider=voice_tts,
-    playback_sink=voice_playback
+    playback_sink=voice_playback,
+    auth_validator=_validate_alex_api_key
 )
 
 from fastapi import WebSocket
@@ -1498,9 +1504,5 @@ from fastapi import WebSocket
 @app.websocket("/api/v1/voice/stream")
 async def v1_voice_stream(websocket: WebSocket, session_id: str, request_id: str):
     """Authenticated endpoint for audio streaming."""
-    x_alex_key = websocket.query_params.get("key")
-    if x_alex_key is None or not hmac.compare_digest(x_alex_key, ALEX_API_KEY):
-        await websocket.close(code=1008)  # Policy Violation
-        return
-        
+    # Auth is handled securely inside BoundedAudioTransport via first-message protocol
     await bounded_audio_transport.handle_websocket(websocket, session_id, request_id)
