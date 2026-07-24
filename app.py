@@ -10,6 +10,7 @@ import shutil
 import socket
 import subprocess
 import threading
+import time
 import uuid
 from collections import deque
 from contextlib import asynccontextmanager
@@ -47,6 +48,13 @@ from alex_safety import CapabilityRegistry, CommandGateway, GatewayResult, Safet
 from alex_ota import AlexOtaService
 from alex_version import ALEX_VERSION
 from alex_health_api import read_health_snapshot
+from alex_intelligence_shadow import (
+    IntelligenceShadowResult,
+    intelligence_shadow_enabled,
+    observe_intelligence_shadow,
+)
+from alex_knowledge import build_system_knowledge_snapshot
+from alex_knowledge_contracts import SystemKnowledgeSnapshot
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -89,6 +97,7 @@ BRAIN_MAC = os.getenv("ALEX_BRAIN_MAC")
 BRAIN_HOST = os.getenv("ALEX_BRAIN_HOST")
 BRAIN_PORT = int(os.getenv("ALEX_BRAIN_PORT", "22"))
 CORE_BRAIN_CONFIG = CoreBrainConfig.from_env(os.environ)
+ALEX_INTELLIGENCE_SHADOW_ENABLED = intelligence_shadow_enabled(os.environ)
 
 DEVICE_ID = "esp01"
 TOPIC_PREFIX = f"alex/device/{DEVICE_ID}"
@@ -939,6 +948,59 @@ def _authoritative_device_list() -> dict[str, Any]:
     return {"items": [v1_device], "simulator": ALEX_SIMULATOR}
 
 
+def _build_intelligence_shadow_snapshot(
+    *,
+    captured_at: str,
+) -> SystemKnowledgeSnapshot:
+    """Read existing Core truth only; this creates no new authority or cache."""
+
+    health_report = read_health_snapshot(ALEX_HEALTH_REPORT_PATH)
+    brain_status = brain_service.status()
+    devices = _authoritative_device_list()["items"]
+    with state_lock:
+        room_mode = device_state["mode"]
+    return build_system_knowledge_snapshot(
+        captured_at=captured_at,
+        version=ALEX_VERSION,
+        health_report=health_report,
+        services={
+            "core": {
+                "status": "online",
+                "available": True,
+                "source": "core_runtime",
+            },
+            "brain": {
+                "status": brain_status.get("state"),
+                "observed_at": (
+                    brain_status.get("confirmed_at")
+                    or brain_status.get("requested_at")
+                ),
+                "source": "core_runtime",
+            },
+        },
+        devices=devices,
+        runtime={
+            "room_mode": room_mode,
+            "simulator": ALEX_SIMULATOR,
+            "source": "core_runtime",
+        },
+    )
+
+
+def _observe_intelligence_shadow(
+    payload: BrainChatRequest,
+) -> IntelligenceShadowResult:
+    captured_at = utc_now_iso()
+    return observe_intelligence_shadow(
+        enabled=ALEX_INTELLIGENCE_SHADOW_ENABLED,
+        user_text=payload.user_text,
+        snapshot_factory=lambda: _build_intelligence_shadow_snapshot(
+            captured_at=captured_at,
+        ),
+        now_monotonic=time.monotonic(),
+    )
+
+
 core_brain_mission_executor = StoredSafeMissionExecutor(
     store,
     mission_executor,
@@ -1076,6 +1138,12 @@ def v1_brain_chat(
     payload: BrainChatRequest,
     _: None = Depends(require_api_key),
 ) -> CoreBrainChatResponse:
+    if ALEX_INTELLIGENCE_SHADOW_ENABLED:
+        try:
+            _observe_intelligence_shadow(payload)
+        except Exception:
+            # Shadow observation must never alter the legacy request contract.
+            pass
     try:
         return core_brain_integration.chat(payload)
     except BrainClientError as error:
