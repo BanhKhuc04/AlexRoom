@@ -1314,9 +1314,10 @@ def v1_brain_chat(
                 )
             except Exception:
                 pass
-        try:
-            if isinstance(fast_path_result, IntelligenceFastPathResult) and fast_path_result.decision:
-                decision = fast_path_result.decision
+        if isinstance(fast_path_result, IntelligenceFastPathResult) and fast_path_result.decision:
+            decision = fast_path_result.decision
+            
+            try:
                 if decision.outcome is RuntimeOutcome.RESPOND_FAST and fast_path_result.handled:
                     return CoreBrainChatResponse(
                         request_id=payload.request_id,
@@ -1324,28 +1325,50 @@ def v1_brain_chat(
                         proposed_tool_calls=[],
                         tool_results=[],
                     )
-                if decision.outcome is RuntimeOutcome.REFUSE_RESTRICTED:
-                    return CoreBrainChatResponse(
+            except Exception:
+                pass
+
+            if decision.outcome is RuntimeOutcome.REFUSE_RESTRICTED:
+                return CoreBrainChatResponse(
+                    request_id=payload.request_id,
+                    assistant_text=decision.response_text or "Hành động này bị giới hạn bởi hệ thống an toàn.",
+                    proposed_tool_calls=[],
+                    tool_results=[],
+                    route="restricted_capability_refusal",
+                    brain_called=False,
+                )
+
+            if decision.outcome is RuntimeOutcome.EXECUTE_ACTION and decision.action_selection:
+                from alex_brain_integration import BrainToolCall
+                tool_call = BrainToolCall(
+                    name=decision.action_selection.name,
+                    arguments=decision.action_selection.deterministic_arguments or {},
+                )
+                try:
+                    response = core_brain_integration.chat_deterministic(
                         request_id=payload.request_id,
-                        assistant_text=decision.response_text or "Hành động này bị giới hạn bởi hệ thống an toàn.",
-                        proposed_tool_calls=[],
-                        tool_results=[],
-                        route="restricted_capability_refusal",
-                        brain_called=False,
-                    )
-                if decision.outcome is RuntimeOutcome.EXECUTE_ACTION and decision.action_selection:
-                    from alex_brain_integration import BrainToolCall
-                    tool_call = BrainToolCall(
-                        name=decision.action_selection.name,
-                        arguments=decision.action_selection.deterministic_arguments or {},
-                    )
-                    return core_brain_integration.chat_deterministic(
-                        request_id=payload.request_id,
+                        user_text=payload.user_text,
                         tool_call=tool_call,
                         assistant_text="[Deterministic Action Fast Path]",
                     )
-        except Exception:
-            pass
+                    if any(result.status == "error" for result in response.tool_results):
+                        raise RuntimeError("Tool execution failed")
+                    return response
+                except Exception:
+                    _audit_core_brain(
+                        "deterministic_execution_failed",
+                        "warning",
+                        {
+                            "request_id": payload.request_id,
+                            "route": "deterministic_safe_action",
+                            "tool_name": tool_call.name,
+                            "brain_called": False,
+                        }
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Deterministic execution failed",
+                    )
     elif ALEX_INTELLIGENCE_SHADOW_ENABLED:
         try:
             _observe_intelligence_shadow(payload)

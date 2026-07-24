@@ -1004,32 +1004,49 @@ def test_1000_eligible_local_evaluations_are_lightweight() -> None:
 
 
 def test_action_fast_path_bypasses_brain_for_exact_match() -> None:
-    service = StubLegacyService()
-    response, _ = request(
-        "Bật test_led của esp01",
-        fast_enabled=False,
-        action_fast_enabled=True,
-        service=service,
+    # Use the REAL core_brain_integration instead of StubLegacyService
+    alex_app.command_gateway.command_service._device["connection"] = "online"
+    from alex_brain_integration import CoreBrainChatResponse, CoreBrainToolResult
+    
+    fake_response = CoreBrainChatResponse(
+        request_id="req-fast-path",
+        assistant_text="[Deterministic Action Fast Path]",
+        proposed_tool_calls=[],
+        tool_results=[CoreBrainToolResult(name="set_test_led", status="confirmed", result={})],
+        route="deterministic_safe_action",
+        brain_called=False
     )
-    data = response.json()
-    assert data.get("route") == "deterministic_safe_action"
-    assert data.get("brain_called") is False
-    assert service.calls == 1
+    
+    with patch.object(alex_app.core_brain_integration, "_process_validated_response", return_value=fake_response) as mock_process:
+        response, legacy = request(
+            "Bật test_led của esp01",
+            fast_enabled=False,
+            action_fast_enabled=True,
+            service=alex_app.core_brain_integration,
+        )
+        data = response.json()
+        assert data.get("route") == "deterministic_safe_action"
+        assert data.get("brain_called") is False
+        
+        # Verify exact user_text preservation and allowed_tools
+        assert mock_process.called
+        brain_req = mock_process.call_args[0][0]
+        assert brain_req.user_text == "Bật test_led của esp01"
+        assert brain_req.allowed_tools == ["set_test_led"]
+        assert data["tool_results"][0]["status"] == "confirmed"
 
 
 def test_action_fast_path_refuses_restricted_capability_locally() -> None:
-    service = StubLegacyService()
-    response, _ = request(
+    response, legacy = request(
         "Bật relay_1 của esp01",
         fast_enabled=False,
         action_fast_enabled=True,
-        service=service,
+        service=alex_app.core_brain_integration,
     )
     data = response.json()
     assert data.get("route") == "restricted_capability_refusal"
     assert data.get("brain_called") is False
     assert "giới hạn" in data["assistant_text"].lower()
-    assert service.calls == 0
 
 
 def test_action_fast_path_falls_back_for_ambiguous_intent() -> None:
@@ -1060,14 +1077,29 @@ def test_action_fast_path_disabled_flag_falls_back() -> None:
 
 
 def test_action_fast_path_refuses_when_device_offline() -> None:
-    service = StubLegacyService()
-    response, _ = request(
+    response, legacy = request(
         "Bật test_led của esp01",
         fast_enabled=False,
         action_fast_enabled=True,
         snapshot=knowledge_snapshot(device_online=False),
-        service=service,
+        service=alex_app.core_brain_integration,
     )
     data = response.json()
     assert data.get("route") == "restricted_capability_refusal"
-    assert service.calls == 0
+
+def test_app_integration_deterministic_failure_fails_closed() -> None:
+    from alex_brain_integration import CoreBrainToolResult
+    
+    # Force the executor to raise an exception
+    with patch.object(alex_app.core_brain_integration, "_set_test_led_executor") as mock_exec:
+        mock_exec.execute.side_effect = RuntimeError("Simulated physical failure")
+        response, legacy = request(
+            "Bật test_led của esp01",
+            fast_enabled=False,
+            action_fast_enabled=True,
+            service=alex_app.core_brain_integration,
+        )
+        # Should raise 500, not fall back to brain
+        assert response.status_code == 500
+        data = response.json()
+        assert data.get("detail") == "Deterministic execution failed"

@@ -245,6 +245,7 @@ class CoreBrainIntegration:
     def chat_deterministic(
         self,
         request_id: str,
+        user_text: str,
         tool_call: BrainToolCall,
         assistant_text: str,
     ) -> CoreBrainChatResponse:
@@ -253,10 +254,11 @@ class CoreBrainIntegration:
             "info",
             {"request_id": request_id},
         )
-        # Create a mock BrainChatRequest since it's deterministic and doesn't rely on allowed_tools rules dynamically.
-        # But wait, _process_validated_response needs request.allowed_tools!
-        # It's an exact action, so we can just construct the BrainChatResponse and call _process_validated_response.
-        request = BrainChatRequest(request_id=request_id, messages=[])
+        request = BrainChatRequest(
+            request_id=request_id,
+            user_text=user_text,
+            allowed_tools=[tool_call.name],
+        )
         response = BrainChatResponse(
             request_id=request_id,
             assistant_text=assistant_text,
