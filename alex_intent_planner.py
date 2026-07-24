@@ -51,6 +51,7 @@ class IntentStep:
     certainty: IntentCertainty
     requires_clarification: bool
     clarification_reason: ClarificationReason | None
+    requested_boolean_target: bool | None = None
 
     def to_compact_dict(self) -> dict[str, Any]:
         return {
@@ -73,6 +74,7 @@ class IntentStep:
                 if self.clarification_reason is not None
                 else None
             ),
+            "requested_boolean_target": self.requested_boolean_target,
         }
 
 
@@ -155,6 +157,7 @@ def _build_step(index: int, text: str) -> IntentStep:
         certainty=_certainty(decision, normalized, clarification_reason),
         requires_clarification=clarification_reason is not None,
         clarification_reason=clarification_reason,
+        requested_boolean_target=_parse_boolean_target(normalized),
     )
 
 
@@ -221,6 +224,16 @@ def _certainty(
     if decision.matched or _CLEAR_LLM_INTENT.search(normalized):
         return IntentCertainty.EXACT
     return IntentCertainty.HEURISTIC
+    
+    
+def _parse_boolean_target(normalized: str) -> bool | None:
+    has_on = bool(re.search(r"\b(?:bat|mo)\b", normalized))
+    has_off = bool(re.search(r"\b(?:tat|dong)\b", normalized))
+    if has_on and not has_off:
+        return True
+    if has_off and not has_on:
+        return False
+    return None
 
 
 def _clarification_reason(

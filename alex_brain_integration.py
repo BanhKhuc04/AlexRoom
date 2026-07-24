@@ -143,6 +143,8 @@ class CoreBrainChatResponse(StrictContractModel):
         default_factory=list,
         max_length=MAX_TOOL_CALLS,
     )
+    route: str | None = None
+    brain_called: bool | None = None
 
 
 class BrainProposalClient(Protocol):
@@ -238,6 +240,38 @@ class CoreBrainIntegration:
             )
             raise BrainClientError("invalid_brain_response") from None
 
+        return self._process_validated_response(request, response)
+
+    def chat_deterministic(
+        self,
+        request_id: str,
+        tool_call: BrainToolCall,
+        assistant_text: str,
+    ) -> CoreBrainChatResponse:
+        self._audit(
+            "request_accepted",
+            "info",
+            {"request_id": request_id},
+        )
+        # Create a mock BrainChatRequest since it's deterministic and doesn't rely on allowed_tools rules dynamically.
+        # But wait, _process_validated_response needs request.allowed_tools!
+        # It's an exact action, so we can just construct the BrainChatResponse and call _process_validated_response.
+        request = BrainChatRequest(request_id=request_id, messages=[])
+        response = BrainChatResponse(
+            request_id=request_id,
+            assistant_text=assistant_text,
+            tool_calls=[tool_call],
+        )
+        core_response = self._process_validated_response(request, response)
+        core_response.route = "deterministic_safe_action"
+        core_response.brain_called = False
+        return core_response
+
+    def _process_validated_response(
+        self,
+        request: BrainChatRequest,
+        response: BrainChatResponse,
+    ) -> CoreBrainChatResponse:
         tool_names = [call.name for call in response.tool_calls]
         self._audit(
             "response_received",

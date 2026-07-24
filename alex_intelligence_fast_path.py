@@ -26,6 +26,7 @@ from alex_knowledge_query import KnowledgeQueryScope
 
 
 FAST_PATH_ENV_NAME: Final = "ALEX_INTELLIGENCE_FAST_PATH_ENABLED"
+ACTION_FAST_PATH_ENV_NAME: Final = "ALEX_INTELLIGENCE_ACTION_FAST_PATH_ENABLED"
 FAST_PATH_TRUE_VALUES: Final = frozenset({"1", "true", "yes", "on"})
 FAST_PATH_ELIGIBLE_SCOPES: Final = (
     KnowledgeQueryScope.SYSTEM_STATUS,
@@ -125,6 +126,17 @@ def intelligence_fast_path_enabled(
     )
 
 
+def intelligence_action_fast_path_enabled(
+    environ: Mapping[str, str],
+) -> bool:
+    """Parse the independent opt-in flag for action fast path; unknown values remain disabled."""
+
+    value = environ.get(ACTION_FAST_PATH_ENV_NAME, "")
+    return isinstance(value, str) and value.strip().lower() in (
+        FAST_PATH_TRUE_VALUES
+    )
+
+
 def evaluate_intelligence_fast_path(
     *,
     enabled: bool,
@@ -133,6 +145,7 @@ def evaluate_intelligence_fast_path(
     now_monotonic: float,
     circuit_state: BrainCircuitBreakerState | None = None,
     circuit_config: BrainCircuitBreakerConfig | None = None,
+    action_fast_path_enabled: bool = False,
     evaluator: RuntimeEvaluator = decide_intelligence_runtime,
 ) -> IntelligenceFastPathResult:
     """Try one local read-only response and otherwise decline to legacy."""
@@ -152,6 +165,7 @@ def evaluate_intelligence_fast_path(
             circuit_state=circuit_state or BrainCircuitBreakerState(),
             circuit_config=circuit_config or BrainCircuitBreakerConfig(),
             now_monotonic=now_monotonic,
+            action_fast_path_enabled=action_fast_path_enabled,
         )
         result = _classify_decision(decision)
     except Exception:

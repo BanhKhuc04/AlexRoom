@@ -57,6 +57,7 @@ class ToolSelection:
     access: ToolAccess
     risk: ToolRisk
     relevant_subjects: tuple[str, ...] = ()
+    deterministic_arguments: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         definition = BRAIN_TOOL_REGISTRY.get(self.name)
@@ -72,6 +73,14 @@ class ToolSelection:
             "relevant_subjects",
             tuple(self.relevant_subjects),
         )
+        if self.deterministic_arguments is not None:
+            # Validate arguments against the registry's exact Pydantic model
+            definition.argument_model.model_validate(self.deterministic_arguments)
+            object.__setattr__(
+                self,
+                "deterministic_arguments",
+                dict(self.deterministic_arguments),
+            )
 
     def to_compact_dict(self) -> dict[str, Any]:
         return {
@@ -79,6 +88,7 @@ class ToolSelection:
             "access": self.access,
             "risk": self.risk,
             "relevant_subjects": list(self.relevant_subjects),
+            "deterministic_arguments": self.deterministic_arguments,
         }
 
 
@@ -213,7 +223,7 @@ def narrow_brain_tools(
                 reason=ToolNarrowingReason.SELECTED_DEVICE_DETAIL,
                 subjects=subjects,
             )
-        return _select_exact_capability_action(context)
+        return _select_exact_capability_action(context, step)
     if context.scope is RelevantContextScope.GENERAL:
         return _empty(
             context,
@@ -268,6 +278,7 @@ def _select_read_tool(
 
 def _select_exact_capability_action(
     context: RelevantContext,
+    step: IntentStep,
 ) -> ToolNarrowingResult:
     capability_sections = tuple(
         section
@@ -299,12 +310,19 @@ def _select_exact_capability_action(
             ToolNarrowingReason.NO_CANONICAL_TOOL,
             incomplete=True,
         )
+    if step.requested_boolean_target is None:
+        return _empty(
+            context,
+            ToolNarrowingReason.NO_CANONICAL_TOOL,
+            incomplete=True,
+        )
     return _selected(
         context,
         (
             _selection(
                 "set_test_led",
                 (capability.subject,),
+                deterministic_arguments={"value": step.requested_boolean_target},
             ),
         ),
         ToolNarrowingReason.SELECTED_EXACT_SAFE_ACTION,
@@ -340,6 +358,8 @@ def _facts(
 def _selection(
     name: ToolName,
     subjects: tuple[str, ...],
+    *,
+    deterministic_arguments: Mapping[str, Any] | None = None,
 ) -> ToolSelection:
     definition = BRAIN_TOOL_REGISTRY[name]
     return ToolSelection(
@@ -347,6 +367,7 @@ def _selection(
         access=definition.access,
         risk=definition.risk,
         relevant_subjects=subjects,
+        deterministic_arguments=deterministic_arguments,
     )
 
 

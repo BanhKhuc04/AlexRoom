@@ -85,8 +85,8 @@ def knowledge_snapshot(
                 "hardware_verified": False,
                 "capabilities": {
                     "test_led": {
-                        "available": True,
-                        "command_allowed": True,
+                        "available": device_online,
+                        "command_allowed": device_online,
                     },
                     "relay_1": {
                         "availability": "restricted",
@@ -155,11 +155,23 @@ class StubLegacyService:
             assistant_text=self.text,
         )
 
+    def chat_deterministic(self, request_id: str, tool_call, assistant_text: str):
+        self.calls += 1
+        return CoreBrainChatResponse(
+            request_id=request_id,
+            assistant_text=assistant_text,
+            proposed_tool_calls=[],
+            tool_results=[],
+            route="deterministic_safe_action",
+            brain_called=False,
+        )
+
 
 def request(
     user_text: str,
     *,
     fast_enabled: bool,
+    action_fast_enabled: bool = False,
     shadow_enabled: bool = False,
     snapshot=None,
     service: StubLegacyService | None = None,
@@ -176,6 +188,11 @@ def request(
             alex_app,
             "ALEX_INTELLIGENCE_SHADOW_ENABLED",
             shadow_enabled,
+        ),
+        patch.object(
+            alex_app,
+            "ALEX_INTELLIGENCE_ACTION_FAST_PATH_ENABLED",
+            action_fast_enabled,
         ),
         patch.object(
             alex_app,
@@ -984,3 +1001,73 @@ def test_1000_eligible_local_evaluations_are_lightweight() -> None:
         )
         assert result.handled
     assert time.perf_counter() - started < 5.0
+
+
+def test_action_fast_path_bypasses_brain_for_exact_match() -> None:
+    service = StubLegacyService()
+    response, _ = request(
+        "Bật test_led của esp01",
+        fast_enabled=False,
+        action_fast_enabled=True,
+        service=service,
+    )
+    data = response.json()
+    assert data.get("route") == "deterministic_safe_action"
+    assert data.get("brain_called") is False
+    assert service.calls == 1
+
+
+def test_action_fast_path_refuses_restricted_capability_locally() -> None:
+    service = StubLegacyService()
+    response, _ = request(
+        "Bật relay_1 của esp01",
+        fast_enabled=False,
+        action_fast_enabled=True,
+        service=service,
+    )
+    data = response.json()
+    assert data.get("route") == "restricted_capability_refusal"
+    assert data.get("brain_called") is False
+    assert "giới hạn" in data["assistant_text"].lower()
+    assert service.calls == 0
+
+
+def test_action_fast_path_falls_back_for_ambiguous_intent() -> None:
+    service = StubLegacyService()
+    response, _ = request(
+        "Bật nó lên đi",
+        fast_enabled=False,
+        action_fast_enabled=True,
+        service=service,
+    )
+    data = response.json()
+    assert data.get("route") != "deterministic_safe_action"
+    assert data.get("route") != "restricted_capability_refusal"
+    assert service.calls == 1
+
+
+def test_action_fast_path_disabled_flag_falls_back() -> None:
+    service = StubLegacyService()
+    response, _ = request(
+        "Bật test_led của esp01",
+        fast_enabled=False,
+        action_fast_enabled=False,
+        service=service,
+    )
+    data = response.json()
+    assert data.get("route") != "deterministic_safe_action"
+    assert service.calls == 1
+
+
+def test_action_fast_path_refuses_when_device_offline() -> None:
+    service = StubLegacyService()
+    response, _ = request(
+        "Bật test_led của esp01",
+        fast_enabled=False,
+        action_fast_enabled=True,
+        snapshot=knowledge_snapshot(device_online=False),
+        service=service,
+    )
+    data = response.json()
+    assert data.get("route") == "restricted_capability_refusal"
+    assert service.calls == 0

@@ -34,6 +34,12 @@ from alex_knowledge_query import (
     KnowledgeQueryScope,
     query_knowledge,
 )
+from alex_relevant_context import build_relevant_context
+from alex_tool_narrowing import (
+    ToolNarrowingReason,
+    ToolSelection,
+    narrow_brain_tools,
+)
 
 
 BRAIN_UNAVAILABLE_TEXT: Final = (
@@ -53,6 +59,8 @@ class RuntimeOutcome(str, Enum):
     CALL_BRAIN = "call_brain"
     BRAIN_UNAVAILABLE = "brain_unavailable"
     UNSUPPORTED = "unsupported"
+    EXECUTE_ACTION = "execute_action"
+    REFUSE_RESTRICTED = "refuse_restricted"
 
 
 class RuntimeReason(str, Enum):
@@ -64,6 +72,8 @@ class RuntimeReason(str, Enum):
     BRAIN_REQUEST_DENIED = "brain_request_denied"
     UNSUPPORTED_MULTI_INTENT = "unsupported_multi_intent"
     UNSUPPORTED_KNOWLEDGE_SCHEMA = "unsupported_knowledge_schema"
+    DETERMINISTIC_SAFE_ACTION = "deterministic_safe_action"
+    RESTRICTED_CAPABILITY_REFUSAL = "restricted_capability_refusal"
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +141,7 @@ class IntelligenceRuntimeDecision:
     next_circuit_state: BrainCircuitBreakerState
     knowledge_schema_version: int
     trace: DecisionTrace
+    action_selection: ToolSelection | None = None
 
     def __post_init__(self) -> None:
         if self.outcome is RuntimeOutcome.CALL_BRAIN:
@@ -197,6 +208,7 @@ def decide_intelligence_runtime(
     circuit_state: BrainCircuitBreakerState,
     circuit_config: BrainCircuitBreakerConfig,
     now_monotonic: float,
+    action_fast_path_enabled: bool = False,
 ) -> IntelligenceRuntimeDecision:
     """Choose one runtime outcome without executing Brain, tools, or I/O."""
 
@@ -261,6 +273,30 @@ def decide_intelligence_runtime(
                 knowledge_scope=knowledge_scope,
             )
 
+    if action_fast_path_enabled and selected_step.decision.route is IntelligenceRoute.LLM:
+        context = build_relevant_context(plan, snapshot)
+        narrowing = narrow_brain_tools(plan, context)
+        if narrowing.reason is ToolNarrowingReason.RESTRICTED_CAPABILITY:
+            return _result(
+                outcome=RuntimeOutcome.REFUSE_RESTRICTED,
+                reason=RuntimeReason.RESTRICTED_CAPABILITY_REFUSAL,
+                plan=plan,
+                selected_step=selected_step,
+                circuit_state=circuit_state,
+                snapshot=snapshot,
+                response_text="Hành động này bị giới hạn bởi hệ thống an toàn.",
+            )
+        if narrowing.reason is ToolNarrowingReason.SELECTED_EXACT_SAFE_ACTION and narrowing.selected_tools:
+            return _result(
+                outcome=RuntimeOutcome.EXECUTE_ACTION,
+                reason=RuntimeReason.DETERMINISTIC_SAFE_ACTION,
+                plan=plan,
+                selected_step=selected_step,
+                circuit_state=circuit_state,
+                snapshot=snapshot,
+                action_selection=narrowing.selected_tools[0],
+            )
+
     permission = before_brain_request(
         circuit_state,
         circuit_config,
@@ -304,6 +340,7 @@ def _result(
     fast_response: FastResponseResult | None = None,
     knowledge_scope: KnowledgeQueryScope | None = None,
     brain_permission: BrainBeforeRequestResult | None = None,
+    action_selection: ToolSelection | None = None,
 ) -> IntelligenceRuntimeDecision:
     brain_request = (
         brain_permission.decision
@@ -332,6 +369,7 @@ def _result(
         degraded=effective_state.degraded,
         probe=probe,
         response_text=response_text,
+        action_selection=action_selection,
         circuit_state=effective_state.state,
         next_circuit_state=effective_state,
         knowledge_schema_version=snapshot.schema_version,

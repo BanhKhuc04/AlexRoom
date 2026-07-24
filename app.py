@@ -65,8 +65,12 @@ from alex_intelligence_fast_path import (
     IntelligenceFastPathResult,
     evaluate_intelligence_fast_path,
     intelligence_fast_path_enabled,
+    intelligence_action_fast_path_enabled,
 )
-from alex_intelligence_runtime import BRAIN_UNAVAILABLE_TEXT
+from alex_intelligence_runtime import (
+    BRAIN_UNAVAILABLE_TEXT,
+    RuntimeOutcome,
+)
 from alex_intent_planner import plan_intelligence
 from alex_brain_resilience_runtime import (
     BrainRequestLease,
@@ -119,6 +123,9 @@ BRAIN_PORT = int(os.getenv("ALEX_BRAIN_PORT", "22"))
 CORE_BRAIN_CONFIG = CoreBrainConfig.from_env(os.environ)
 ALEX_INTELLIGENCE_SHADOW_ENABLED = intelligence_shadow_enabled(os.environ)
 ALEX_INTELLIGENCE_FAST_PATH_ENABLED = intelligence_fast_path_enabled(
+    os.environ
+)
+ALEX_INTELLIGENCE_ACTION_FAST_PATH_ENABLED = intelligence_action_fast_path_enabled(
     os.environ
 )
 ALEX_BRAIN_CIRCUIT_BREAKER_ENABLED = brain_circuit_breaker_enabled(
@@ -1038,12 +1045,13 @@ def _evaluate_intelligence_fast_path(
 ) -> IntelligenceFastPathResult:
     captured_at = utc_now_iso()
     return evaluate_intelligence_fast_path(
-        enabled=ALEX_INTELLIGENCE_FAST_PATH_ENABLED,
+        enabled=ALEX_INTELLIGENCE_FAST_PATH_ENABLED or ALEX_INTELLIGENCE_ACTION_FAST_PATH_ENABLED,
         user_text=payload.user_text,
         snapshot_factory=lambda: _build_intelligence_shadow_snapshot(
             captured_at=captured_at,
         ),
         now_monotonic=time.monotonic(),
+        action_fast_path_enabled=ALEX_INTELLIGENCE_ACTION_FAST_PATH_ENABLED,
     )
 
 
@@ -1276,13 +1284,17 @@ def v1_brain() -> dict[str, Any]:
     return brain_service.status()
 
 
-@app.post("/api/v1/brain/chat", response_model=CoreBrainChatResponse)
+@app.post(
+    "/api/v1/brain/chat",
+    response_model=CoreBrainChatResponse,
+    response_model_exclude_none=True,
+)
 def v1_brain_chat(
     payload: BrainChatRequest,
     _: None = Depends(require_api_key),
 ) -> CoreBrainChatResponse:
     fast_path_result: IntelligenceFastPathResult | None = None
-    if ALEX_INTELLIGENCE_FAST_PATH_ENABLED:
+    if ALEX_INTELLIGENCE_FAST_PATH_ENABLED or ALEX_INTELLIGENCE_ACTION_FAST_PATH_ENABLED:
         try:
             fast_path_result = _evaluate_intelligence_fast_path(payload)
         except Exception:
@@ -1303,19 +1315,35 @@ def v1_brain_chat(
             except Exception:
                 pass
         try:
-            if (
-                isinstance(
-                    fast_path_result,
-                    IntelligenceFastPathResult,
-                )
-                and fast_path_result.handled
-            ):
-                return CoreBrainChatResponse(
-                    request_id=payload.request_id,
-                    assistant_text=fast_path_result.assistant_text or "",
-                    proposed_tool_calls=[],
-                    tool_results=[],
-                )
+            if isinstance(fast_path_result, IntelligenceFastPathResult) and fast_path_result.decision:
+                decision = fast_path_result.decision
+                if decision.outcome is RuntimeOutcome.RESPOND_FAST and fast_path_result.handled:
+                    return CoreBrainChatResponse(
+                        request_id=payload.request_id,
+                        assistant_text=fast_path_result.assistant_text or "",
+                        proposed_tool_calls=[],
+                        tool_results=[],
+                    )
+                if decision.outcome is RuntimeOutcome.REFUSE_RESTRICTED:
+                    return CoreBrainChatResponse(
+                        request_id=payload.request_id,
+                        assistant_text=decision.response_text or "Hành động này bị giới hạn bởi hệ thống an toàn.",
+                        proposed_tool_calls=[],
+                        tool_results=[],
+                        route="restricted_capability_refusal",
+                        brain_called=False,
+                    )
+                if decision.outcome is RuntimeOutcome.EXECUTE_ACTION and decision.action_selection:
+                    from alex_brain_integration import BrainToolCall
+                    tool_call = BrainToolCall(
+                        name=decision.action_selection.name,
+                        arguments=decision.action_selection.deterministic_arguments or {},
+                    )
+                    return core_brain_integration.chat_deterministic(
+                        request_id=payload.request_id,
+                        tool_call=tool_call,
+                        assistant_text="[Deterministic Action Fast Path]",
+                    )
         except Exception:
             pass
     elif ALEX_INTELLIGENCE_SHADOW_ENABLED:

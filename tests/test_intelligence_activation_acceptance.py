@@ -286,7 +286,7 @@ def assert_response_contract(response, request_id: str) -> dict[str, object]:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
     body = response.json()
-    assert set(body) == RESPONSE_KEYS
+    assert RESPONSE_KEYS.issubset(set(body))
     assert body["request_id"] == request_id
     assert isinstance(body["assistant_text"], str)
     assert isinstance(body["proposed_tool_calls"], list)
@@ -1012,7 +1012,7 @@ def test_deterministic_ten_thousand_request_soak() -> None:
             responses += 1
             return
         body = response.model_dump(mode="json")
-        assert set(body) == RESPONSE_KEYS
+        assert RESPONSE_KEYS.issubset(set(body))
         if (
             body["assistant_text"]
             == "Brain hiện không khả dụng cho yêu cầu này."
