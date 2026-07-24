@@ -94,19 +94,13 @@ export function createPresenceCommands(options) {
       return;
     }
 
-    if (normalized.includes("xin chào") || normalized.includes("chào alex")) {
-      if (!options.beginThinking()) return;
-      await delay(560);
-      if (options.visualState() === "thinking") options.setVisualState("speaking");
-      options.view.showMicroResponse("Xin chào Việt Anh. Kênh phụ đề đang hoạt động; âm thanh sẽ được triển khai ở Phase 3.");
-      await delay(1500);
-      if (options.visualState() === "speaking") options.setVisualState("success");
-      options.scheduleIdle();
+    if (options.executeBrainChat) {
+      await options.executeBrainChat(raw);
       return;
     }
 
     if (options.beginThinking()) options.setVisualState("warning");
-    options.view.showMicroResponse("Intent này chưa được nối trong Phase 2. ALEX không thực hiện hành động giả lập.");
+    options.view.showMicroResponse("Chưa kết nối kênh điều hướng thông minh.");
     options.scheduleIdle();
   }
 

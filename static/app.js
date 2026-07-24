@@ -10,6 +10,10 @@ import { createPresenceCommands } from "./ui/presence-commands.js";
 import { createPresenceView } from "./ui/presence-view.js";
 import { WORKSPACES, renderWorkspace } from "./ui/workspaces.js";
 
+import { VoiceClient } from "./core/voice-client.js";
+import { AudioRecorder } from "./core/audio-recorder.js";
+import { VoicePlayback } from "./core/voice-playback.js";
+
 /** @typedef {import("./core/alex-state.js").AlexVisualState} AlexVisualState */
 /** @typedef {import("./core/command-lifecycle.js").DeviceCommand} DeviceCommand */
 /** @typedef {import("./core/domain").SystemSnapshot} SystemSnapshot */
@@ -33,39 +37,99 @@ const realtime = new AlexRealtime({
 });
 const alexState = createAlexStateMachine();
 const systemReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-const presenceView = createPresenceView();
+
+const voicePlayback = new VoicePlayback();
+
+const voiceClient = new VoiceClient({
+  onStateChange: (state) => {
+    /** @type {Record<string, AlexVisualState>} */
+    const stateMap = {
+      idle: "idle",
+      listening: "listening",
+      transcribing: "thinking",
+      thinking: "thinking",
+      acting: "acting",
+      speaking: "speaking",
+      completed: "success",
+      failed: "warning",
+      cancelled: "idle",
+      unavailable: "offline",
+    };
+    const mapped = stateMap[state] ?? "idle";
+    if (alexState.can(mapped)) setAlexState(mapped);
+  },
+  onTranscript: (transcript) => {
+    if (transcript) {
+      presenceView.showMicroResponse(`"${transcript}"`);
+    }
+  },
+  onAssistantText: (text) => {
+    if (text) {
+      presenceView.showMicroResponse(text);
+      elements.assistantMessage.textContent = text;
+      elements.assistantEvidence.textContent = "EVIDENCE / INTELLIGENCE ROUTER";
+    }
+  },
+  onAudioData: (audioBase64) => {
+    void voicePlayback.playAudio(audioBase64);
+  },
+  onError: (err) => {
+    /** @type {Record<string, string>} */
+    const errorMessages = {
+      microphone_permission_denied: "Quyền microphone bị từ chối.",
+      auth_timeout: "Hết thời gian xác thực giọng nói.",
+      voice_unavailable: "Dịch vụ giọng nói chưa sẵn sàng.",
+      stt_unavailable: "Dịch vụ STT máy chủ chưa sẵn sàng.",
+      brain_unavailable: "ALEX Brain PC chưa kết nối.",
+      brain_timeout: "Hết thời gian xử lý trên máy chủ.",
+      websocket_connection_failed: "Không thể mở kết nối Voice WebSocket.",
+      websocket_error: "Lỗi đường truyền giọng nói.",
+    };
+    const msg = errorMessages[err] ?? `Lỗi giọng nói: ${err}`;
+    showToast(msg, "error");
+    presenceView.showMicroResponse(msg);
+    if (alexState.can("warning")) setAlexState("warning");
+    scheduleIdle();
+  },
+});
+
+const audioRecorder = new AudioRecorder({
+  onChunk: (chunk) => {
+    voiceClient.sendAudioChunk(chunk);
+  },
+});
+
+const presenceView = createPresenceView({
+  onMicStart: async (stream) => {
+    if (!api.apiKey) {
+      showToast("Cần xác minh API key trước khi dùng kênh giọng nói.");
+      openAuthDialog();
+      await presenceView.stopMicrophone();
+      return;
+    }
+    try {
+      if (alexState.can("wake")) setAlexState("wake");
+      await voiceClient.connect(api.apiKey);
+      if (alexState.can("listening")) setAlexState("listening");
+      audioRecorder.start(stream);
+    } catch {
+      await presenceView.stopMicrophone();
+    }
+  },
+  onMicStop: async () => {
+    if (audioRecorder.recording) {
+      const wavBuffer = await audioRecorder.stop();
+      if (voiceClient.authenticated) {
+        if (alexState.can("thinking")) setAlexState("thinking");
+        voiceClient.sendAudioChunk(wavBuffer);
+        voiceClient.endAudio();
+      }
+    }
+  },
+});
+
 const soundEngine = createSoundEngine({ AudioContext: window.AudioContext });
 const STATE_CUES = Object.freeze({ wake: "wake", listening: "listen_open", thinking: "input_accept", acting: "processing_delay", success: "action_success", warning: "warning", critical: "critical", offline: "offline" });
-
-/** @type {AppMode} */
-let appMode = "presence";
-/** @type {keyof typeof WORKSPACES} */
-let activeWorkspace = "overview";
-/** @type {SystemSnapshot | null} */
-let snapshot = null;
-/** @type {DeviceCommand | null} */
-let activeCommand = null;
-/** @type {number | null} */
-let pollTimer = null;
-/** @type {number | null} */
-let clockTimer = null;
-/** @type {number | null} */
-let idleTimer = null;
-let refreshInFlight = false;
-let destroyed = false;
-let lastSoundState = "idle";
-let userReducedMotion = localStorage.getItem("alexReducedMotion") === "true";
-/** @type {QualityMode} */
-let quality = normalizeQualityMode(localStorage.getItem("alexQuality"));
-let soundSettings = loadSoundSettings();
-
-function loadSoundSettings() {
-  try {
-    return normalizeSoundSettings(JSON.parse(localStorage.getItem("alexSoundSettings") ?? "{}"));
-  } catch {
-    return DEFAULT_SOUND_SETTINGS;
-  }
-}
 
 const presenceCommands = createPresenceCommands({
   visualState: () => alexState.value,
@@ -78,6 +142,7 @@ const presenceCommands = createPresenceCommands({
   executeRelay: executeRelayCommand,
   executeTestLed: executeTestLedCommand,
   executeMode: executeModeCommand,
+  executeBrainChat,
   scheduleIdle,
   reducedMotion: () => userReducedMotion || systemReducedMotion.matches,
   view: presenceView,
@@ -425,6 +490,45 @@ function beginThinking() {
   if (alexState.value === "idle" && !setAlexState("wake")) return false;
   if (alexState.value === "wake" || alexState.value === "listening") return setAlexState("thinking");
   return alexState.value === "thinking";
+}
+
+/** @param {string} userText */
+async function executeBrainChat(userText) {
+  if (!api.apiKey) {
+    showToast("Cần xác minh API key trước khi gửi câu hỏi.");
+    openAuthDialog();
+    return;
+  }
+  if (!beginThinking()) {
+    showToast("Alex Core đang offline; câu hỏi không được gửi.", "error");
+    return;
+  }
+
+  try {
+    elements.assistantMessage.textContent = `User: "${userText}"`;
+    elements.assistantEvidence.textContent = "EVIDENCE / PENDING ROUTER";
+
+    const response = await api.requestBrainChat(userText);
+
+    if (response.tool_results && response.tool_results.length > 0) {
+      setAlexState("acting");
+      await delay(400);
+    }
+
+    setAlexState("success");
+    const assistantText = response.assistant_text || "ALEX đã xử lý xong yêu cầu.";
+    presenceView.showMicroResponse(assistantText);
+    elements.assistantMessage.textContent = assistantText;
+    elements.assistantEvidence.textContent = `EVIDENCE / ${response.route?.toUpperCase() ?? "INTELLIGENCE ROUTER"}`;
+    showToast("Đã xử lý qua Intelligence Router", "success");
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "Không thể kết nối Intelligence Router";
+    setAlexState("warning");
+    presenceView.showMicroResponse(`Không thể phản hồi: ${reason}`);
+    showToast(reason, "error");
+  }
+  renderActiveWorkspace();
+  scheduleIdle();
 }
 
 /** @param {number} relayId @param {"ON" | "OFF"} action */

@@ -92,6 +92,7 @@ export function createAudioWaveform(navigatorObject = navigator, windowObject = 
     start,
     stop,
     samples,
+    getStream: () => stream,
     get mode() { return mode; },
     get diagnostics() {
       return Object.freeze({

@@ -1,15 +1,15 @@
 /// <reference lib="webworker" />
 
-const CACHE = "alex-nexus-mark3-safety-v4";
+const CACHE = "alex-nexus-mark3-phase-1.0-v1";
 const APP_SHELL = [
   "/",
-  "/static/styles.css?v=safety-v4",
-  "/static/styles/tokens.css?v=safety-v4",
-  "/static/styles/base.css?v=safety-v4",
-  "/static/styles/presence.css?v=safety-v4",
-  "/static/styles/command-center.css?v=safety-v4",
-  "/static/styles/responsive.css?v=safety-v4",
-  "/static/app.js?v=safety-v4",
+  "/static/styles.css?v=phase-1.0-v1",
+  "/static/styles/tokens.css?v=phase-1.0-v1",
+  "/static/styles/base.css?v=phase-1.0-v1",
+  "/static/styles/presence.css?v=phase-1.0-v1",
+  "/static/styles/command-center.css?v=phase-1.0-v1",
+  "/static/styles/responsive.css?v=phase-1.0-v1",
+  "/static/app.js?v=phase-1.0-v1",
   "/static/core/audio-waveform.js",
   "/static/core/core-renderer.js",
   "/static/core/core-visuals.js",
@@ -20,6 +20,9 @@ const APP_SHELL = [
   "/static/core/realtime.js",
   "/static/core/quality.js",
   "/static/core/sound-engine.js",
+  "/static/core/voice-client.js",
+  "/static/core/audio-recorder.js",
+  "/static/core/voice-playback.js",
   "/static/ui/elements-phase2.js",
   "/static/ui/presence-commands.js",
   "/static/ui/presence-view.js",

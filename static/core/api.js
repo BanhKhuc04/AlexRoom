@@ -277,4 +277,21 @@ export class AlexApi {
       body: JSON.stringify({ body: definition })
     }));
   }
+
+  /**
+   * Send natural language text to IntelligenceRouter via Core /api/v1/brain/chat.
+   * @param {string} userText
+   * @param {string} [requestId]
+   * @returns {Promise<import("./domain").CoreBrainChatResponse>}
+   */
+  async requestBrainChat(userText, requestId = `req-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`) {
+    return /** @type {Promise<import("./domain").CoreBrainChatResponse>} */ (this.request("/api/v1/brain/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request_id: requestId,
+        user_text: userText,
+      }),
+    }));
+  }
 }

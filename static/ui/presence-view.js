@@ -7,7 +7,7 @@ import { elements } from "./elements-phase2.js";
 /** @typedef {import("../core/quality.js").MotionProfile} MotionProfile */
 /** @typedef {import("../core/domain").SystemSnapshot} SystemSnapshot */
 
-export function createPresenceView() {
+export function createPresenceView(options = {}) {
   const waveform = createAudioWaveform();
   const renderer = createCoreRenderer(elements.coreCanvas, waveform);
   /** @type {number | null} */
@@ -101,13 +101,21 @@ export function createPresenceView() {
   }
 
   async function toggleMicrophone() {
-    if (waveform.mode === "microphone") await waveform.stop();
-    else await waveform.start();
+    if (waveform.mode === "microphone") {
+      await waveform.stop();
+      options.onMicStop?.();
+    } else {
+      const ok = await waveform.start();
+      if (ok && waveform.getStream()) {
+        options.onMicStart?.(waveform.getStream());
+      }
+    }
     updateMicrophoneUi();
   }
 
   async function stopMicrophone() {
     await waveform.stop();
+    options.onMicStop?.();
     updateMicrophoneUi();
   }
 
