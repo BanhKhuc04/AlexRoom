@@ -99,6 +99,7 @@ class OpenAICompatibleProvider:
         system_instruction: str,
         user_text: str,
         tools: Sequence[Mapping[str, object]],
+        generation_budget: int | None = None,
     ) -> ProviderReply:
         if not self.configured:
             raise ProviderNotConfiguredError("provider_not_configured")
@@ -113,6 +114,8 @@ class OpenAICompatibleProvider:
                 {"role": "user", "content": user_text},
             ],
         }
+        if generation_budget is not None:
+            payload["max_tokens"] = generation_budget
         if tools:
             payload["tools"] = list(tools)
             payload["tool_choice"] = "auto"

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Final
+from typing import Final, Literal
 
 from alex_brain_tools import BrainChatRequest, BrainRelevantContext
 from alex_intent_planner import IntelligencePlan
@@ -44,11 +44,24 @@ def build_guarded_brain_request(
     wire_context = BrainRelevantContext.model_validate(
         context.to_compact_dict()
     )
+    mode: Literal["exact_mutation"] | None = None
+    if (
+        narrowing.reason == "selected_exact_safe_action"
+        and len(narrowing.selected_tool_names) == 1
+        and "set_test_led" in narrowing.selected_tool_names
+        and any(
+            section.subject == "esp01.test_led"
+            for section in wire_context.sections
+        )
+    ):
+        mode = "exact_mutation"
+
     return BrainChatRequest(
         request_id=request.request_id,
         user_text=request.user_text,
         context=wire_context,
         allowed_tools=list(narrowing.selected_tool_names),
+        mode=mode,
     )
 
 

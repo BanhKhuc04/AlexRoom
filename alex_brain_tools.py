@@ -367,6 +367,10 @@ class BrainChatRequest(StrictContractModel):
         max_length=len(TOOL_NAMES),
         exclude_if=lambda value: value is None,
     )
+    mode: Literal["exact_mutation"] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
     @model_validator(mode="after")
     def validate_enhanced_fields(self) -> "BrainChatRequest":

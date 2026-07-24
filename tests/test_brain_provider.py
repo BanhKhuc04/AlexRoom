@@ -55,6 +55,7 @@ class FakeProvider:
         system_instruction: str,
         user_text: str,
         tools,
+        generation_budget: int | None = None,
     ) -> ProviderReply:
         self.requests.append(
             {

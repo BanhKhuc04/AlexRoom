@@ -56,6 +56,7 @@ class OllamaNativeProvider:
         system_instruction: str,
         user_text: str,
         tools: Sequence[Mapping[str, object]],
+        generation_budget: int | None = None,
     ) -> ProviderReply:
         if not self.configured:
             raise ProviderNotConfiguredError("provider_not_configured")
@@ -74,7 +75,7 @@ class OllamaNativeProvider:
             "keep_alive": OLLAMA_KEEP_ALIVE,
             "options": {
                 "temperature": 0,
-                "num_predict": OLLAMA_NUM_PREDICT,
+                "num_predict": generation_budget if generation_budget is not None else OLLAMA_NUM_PREDICT,
             },
         }
         if tools:
