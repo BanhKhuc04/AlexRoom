@@ -44,6 +44,7 @@ from alex_brain_missions import StoredSafeMissionExecutor
 from alex_brain_mutations import CommandGatewaySetTestLedExecutor
 from alex_brain_room_mode import AuthoritativeRoomModeExecutor, RoomMode
 from alex_brain_tools import BrainChatRequest
+from alex_command_verification import command_verification_result
 from alex_brain_context_envelope import (
     brain_relevant_context_enabled,
     build_fail_closed_brain_request,
@@ -430,6 +431,9 @@ def _with_command_verification(command: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         **command,
+        "command_verification": (
+            command_verification_result(command).to_compact_dict()
+        ),
         "verification": {
             "node": node_summary,
             "capability": capability_truth,
@@ -1174,6 +1178,14 @@ def v1_command(
     except RuntimeError as error:
         if str(error) == "esp01_offline":
             raise HTTPException(status_code=409, detail="ESP01 chưa ONLINE; command không được gửi") from error
+        if str(error) == "test_led_command_in_progress":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "ESP01 test_led đang có command chờ xác minh; "
+                    "command mới không được gửi"
+                ),
+            ) from error
         raise
     response = _gateway_response_or_denied(result)
     command = response.get("command")

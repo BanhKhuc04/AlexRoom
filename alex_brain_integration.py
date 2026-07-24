@@ -83,6 +83,7 @@ CoreToolResultReason = Literal[
     "authoritative_read_failed",
     "safety_gateway_denied",
     "device_unavailable",
+    "command_in_progress",
     "command_not_created",
     "command_lifecycle_failed",
     "mutation_execution_failed",
