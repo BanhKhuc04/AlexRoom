@@ -20,9 +20,17 @@ MAX_CHUNK_SIZE_BYTES = 1024 * 1024 * 2  # 2MB max per chunk
 class BoundedAudioTransport:
     """Bounded WebSocket transport for receiving audio chunks and managing voice sessions."""
 
-    def __init__(self, stt_provider: STTProvider, router_dispatch: Callable[[Any], Any]) -> None:
+    def __init__(
+        self,
+        stt_provider: STTProvider,
+        router_dispatch: Callable[[Any], Any],
+        tts_provider: Any = None,
+        playback_sink: Any = None
+    ) -> None:
         self.stt_provider = stt_provider
         self.router_dispatch = router_dispatch
+        self.tts_provider = tts_provider
+        self.playback_sink = playback_sink
 
     async def handle_websocket(self, websocket: WebSocket, session_id: str, request_id: str) -> None:
         await websocket.accept()
@@ -103,9 +111,29 @@ class BoundedAudioTransport:
             
             response = process_voice_transcript(session, voice_input, router)
             
+            # Phase 1.0 C7: Bare-In Orchestration Pipeline Integration
+            # If the response contains text to speak, synthesize and play
+            audio_response = None
+            if response.assistant_text and self.tts_provider and self.playback_sink:
+                try:
+                    # process_voice_transcript already transitions to SPEAKING if needed
+                    tts_result = await self.tts_provider.synthesize(session_id, request_id, response.assistant_text)
+                    audio_response = tts_result.audio_data
+                    
+                    # Play the audio
+                    await self.playback_sink.play(audio_response)
+                except Exception as e:
+                    logger.error(f"TTS/Playback error for {session_id}: {e}")
+                    # Failure to speak does not fail the whole session's core intent
+            
+            if response.state == VoiceSessionState.SPEAKING:
+                session.transition_to(VoiceSessionState.COMPLETED)
+            
             if not websocket.client_state.name == "DISCONNECTED":
+                # For transport we may want to send the audio back if it's a remote client,
+                # but local playback sink handles it if it's local. We'll send the state anyway.
                 await websocket.send_json({
-                    "state": response.state.value,
+                    "state": session.state.value,
                     "transcript": stt_result.transcript,
                     "assistant_text": response.assistant_text,
                     "error_code": response.error_code
