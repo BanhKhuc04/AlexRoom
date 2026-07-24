@@ -1183,6 +1183,14 @@ def _router_shadow_observer(
     else:
         _observe_intelligence_shadow(payload)
 
+def _route_observation_sink(obs: "IntelligenceRouteObservation") -> None:
+    # Emits structured runtime log best-effort. Does not call store.add_audit().
+    import logging
+    logging.getLogger("alex.intelligence.telemetry").info(
+        "Intelligence route observation",
+        extra={"route_observation": obs.to_compact_dict()}
+    )
+
 
 intelligence_router = IntelligenceRouter(
     core_brain_integration=core_brain_integration,
@@ -1194,8 +1202,8 @@ intelligence_router = IntelligenceRouter(
     action_fast_path_enabled=lambda: ALEX_INTELLIGENCE_ACTION_FAST_PATH_ENABLED,
     shadow_enabled=lambda: ALEX_INTELLIGENCE_SHADOW_ENABLED,
     audit_logger=lambda ev, level, dt: _audit_core_brain(ev, level, dt),
+    route_observation_sink=_route_observation_sink,
 )
-
 
 @app.post("/api/v1/commands")
 def v1_command(

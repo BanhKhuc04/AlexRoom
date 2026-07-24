@@ -175,6 +175,7 @@ class IntelligenceRouter:
         action_fast_path_enabled: Callable[[], bool],
         shadow_enabled: Callable[[], bool],
         audit_logger: Callable[[str, str, dict[str, Any]], None],
+        route_observation_sink: Callable[[IntelligenceRouteObservation], None],
     ):
         self.core_brain_integration = core_brain_integration
         self.fast_path_evaluator = fast_path_evaluator
@@ -185,6 +186,7 @@ class IntelligenceRouter:
         self.action_fast_path_enabled = action_fast_path_enabled
         self.shadow_enabled = shadow_enabled
         self.audit_logger = audit_logger
+        self.route_observation_sink = route_observation_sink
         self.metrics = IntelligenceRouterMetrics()
 
     def dispatch(self, payload: BrainChatRequest) -> CoreBrainChatResponse:
@@ -222,12 +224,8 @@ class IntelligenceRouter:
             self.metrics.record(observation)
 
             # Route observations are best-effort and must not affect authoritative execution.
-	    # Persistence policy is delegated to the injected audit sink.
-            self.audit_logger(
-                "route_observation",
-                "info",
-                observation.to_compact_dict()
-            )
+            # Persistence policy is delegated to the injected observation sink.
+            self.route_observation_sink(observation)
         except Exception:
             pass
 

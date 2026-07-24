@@ -1,4 +1,4 @@
-import pytest
+﻿import pytest
 from unittest.mock import Mock, patch
 
 from alex_brain_tools import BrainChatRequest
@@ -41,6 +41,7 @@ def test_deterministic_ten_thousand_route_soak() -> None:
         action_fast_path_enabled=lambda: True,
         shadow_enabled=lambda: True,
         audit_logger=Mock(),
+        route_observation_sink=Mock(),
     )
 
     # 1. Action route
@@ -147,8 +148,8 @@ def test_deterministic_ten_thousand_route_soak() -> None:
 
 
 def test_observability_sink_failure_does_not_affect_successful_route() -> None:
-    # Setup similar to above, but audit_logger raises Exception
-    mock_audit = Mock(side_effect=Exception("Audit failure"))
+    # Setup similar to above, but route_observation_sink raises Exception
+    mock_sink = Mock(side_effect=Exception("Audit failure"))
 
     mock_executor = Mock(return_value=CoreBrainChatResponse(
         request_id="sink-fail",
@@ -167,14 +168,15 @@ def test_observability_sink_failure_does_not_affect_successful_route() -> None:
         fast_path_enabled=lambda: True,
         action_fast_path_enabled=lambda: True,
         shadow_enabled=lambda: True,
-        audit_logger=mock_audit,
+        audit_logger=Mock(),
+        route_observation_sink=mock_sink,
     )
 
     request = BrainChatRequest(request_id="sink-fail", user_text="hello")
     response = router.dispatch(request)
 
     assert response.assistant_text == "fallback"
-    assert mock_audit.call_count == 1
+    assert mock_sink.call_count == 1
 
     snapshot = router.metrics.snapshot()
     assert snapshot["total_requests"] == 1
@@ -201,6 +203,7 @@ def test_router_performance_regression() -> None:
         action_fast_path_enabled=lambda: True,
         shadow_enabled=lambda: True,
         audit_logger=Mock(),
+        route_observation_sink=Mock(),
     )
 
     request = BrainChatRequest(request_id="perf", user_text="hello")
@@ -215,3 +218,41 @@ def test_router_performance_regression() -> None:
     # 1000 iterations should be extremely fast (typically < 0.2s)
     # Give a generous upper bound for CI hardware
     assert end - start < 2.0
+
+
+def test_route_observation_does_not_call_durable_audit() -> None:
+    mock_audit = Mock()
+    mock_sink = Mock()
+    mock_executor = Mock(return_value=CoreBrainChatResponse(
+        request_id="durable-test",
+        assistant_text="resp",
+        proposed_tool_calls=[],
+        tool_results=[],
+    ))
+
+    router = IntelligenceRouter(
+        core_brain_integration=Mock(),
+        fast_path_evaluator=Mock(return_value=None),
+        shadow_observer=Mock(),
+        brain_request_builder=Mock(),
+        brain_chat_executor=mock_executor,
+        fast_path_enabled=lambda: True,
+        action_fast_path_enabled=lambda: True,
+        shadow_enabled=lambda: True,
+        audit_logger=mock_audit,
+        route_observation_sink=mock_sink,
+    )
+
+    request = BrainChatRequest(request_id="durable-test", user_text="test")
+    router.dispatch(request)
+
+    # Prove structured sink invoked exactly once
+    assert mock_sink.call_count == 1
+
+    # Prove normal durability logger was NEVER called for route_observation
+    # It might be called for deterministic failure, but here it's CALL_BRAIN success
+    assert mock_audit.call_count == 0
+
+    # Prove metric incremented exactly once
+    snapshot = router.metrics.snapshot()
+    assert snapshot["total_requests"] == 1
