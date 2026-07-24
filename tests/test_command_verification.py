@@ -400,3 +400,69 @@ def test_pure_verification_module_has_no_io_or_authorization_dependency() -> Non
         ".publish(",
     )
     assert all(marker not in source for marker in forbidden)
+
+
+def test_derive_command_lifecycle_metrics_success() -> None:
+    from alex_command_verification import derive_command_lifecycle_metrics
+    cmd = command(phase="confirmed")
+    # REQUESTED_AT = "2026-07-24T10:00:00+00:00"
+    # SENT_AT = "2026-07-24T10:00:01+00:00"
+    # ACK_AT = "2026-07-24T10:00:02+00:00"
+    # CONFIRMED_AT = "2026-07-24T10:00:03+00:00"
+    result = command_verification_result(cmd)
+    metrics = derive_command_lifecycle_metrics(result)
+
+    assert metrics.requested_to_published_ms == 1000
+    assert metrics.published_to_ack_ms == 1000
+    assert metrics.ack_to_verified_ms == 1000
+    assert metrics.requested_to_verified_ms == 3000
+
+    compact = metrics.to_compact_dict()
+    assert compact["requested_to_published_ms"] == 1000
+    assert compact["published_to_ack_ms"] == 1000
+
+
+def test_derive_command_lifecycle_metrics_missing_timestamps() -> None:
+    from alex_command_verification import derive_command_lifecycle_metrics
+    cmd = command(phase="queued")
+    # sent_at and later will be None if we manipulate the dict
+    cmd.pop("sent_at", None)
+    cmd.pop("acknowledged_at", None)
+    cmd.pop("confirmed_at", None)
+
+    result = command_verification_result(cmd)
+    metrics = derive_command_lifecycle_metrics(result)
+
+    assert metrics.requested_to_published_ms is None
+    assert metrics.published_to_ack_ms is None
+    assert metrics.ack_to_verified_ms is None
+    assert metrics.requested_to_verified_ms is None
+
+
+def test_derive_command_lifecycle_metrics_invalid_timestamp_returns_none() -> None:
+    from alex_command_verification import derive_command_lifecycle_metrics
+    cmd = command(phase="confirmed")
+    cmd["requested_at"] = "invalid-date"
+
+    result = command_verification_result(cmd)
+    metrics = derive_command_lifecycle_metrics(result)
+
+    assert metrics.requested_to_published_ms is None
+    assert metrics.requested_to_verified_ms is None
+    # Still can calculate valid ones
+    assert metrics.published_to_ack_ms == 1000
+
+
+def test_derive_command_lifecycle_metrics_negative_duration_returns_none() -> None:
+    from alex_command_verification import derive_command_lifecycle_metrics
+    cmd = command(phase="confirmed")
+    # Time travels backward
+    cmd["sent_at"] = "2026-07-24T09:00:00+00:00"
+
+    result = command_verification_result(cmd)
+    metrics = derive_command_lifecycle_metrics(result)
+
+    # Negative duration
+    assert metrics.requested_to_published_ms is None
+    # Positive duration from 09:00 to 10:00:02
+    assert metrics.published_to_ack_ms == 3602000

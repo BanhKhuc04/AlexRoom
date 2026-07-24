@@ -575,3 +575,51 @@ def _string(value: object, fallback: str) -> str:
 
 def _optional_string(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+@dataclass(frozen=True, slots=True)
+class CommandLifecycleMetrics:
+    requested_to_published_ms: int | None
+    published_to_ack_ms: int | None
+    ack_to_verified_ms: int | None
+    requested_to_verified_ms: int | None
+
+    def to_compact_dict(self) -> dict[str, object]:
+        return {
+            "requested_to_published_ms": self.requested_to_published_ms,
+            "published_to_ack_ms": self.published_to_ack_ms,
+            "ack_to_verified_ms": self.ack_to_verified_ms,
+            "requested_to_verified_ms": self.requested_to_verified_ms,
+        }
+
+
+def _duration_ms(start_iso: str | None, end_iso: str | None) -> int | None:
+    if not start_iso or not end_iso:
+        return None
+    try:
+        from datetime import datetime
+        start = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
+        delta = int((end - start).total_seconds() * 1000)
+        return delta if delta >= 0 else None
+    except BaseException:
+        return None
+
+
+def derive_command_lifecycle_metrics(
+    result: CommandVerificationResult,
+) -> CommandLifecycleMetrics:
+    return CommandLifecycleMetrics(
+        requested_to_published_ms=_duration_ms(
+            result.requested_at, result.published_at
+        ),
+        published_to_ack_ms=_duration_ms(
+            result.published_at, result.acknowledged_at
+        ),
+        ack_to_verified_ms=_duration_ms(
+            result.acknowledged_at, result.verified_at
+        ),
+        requested_to_verified_ms=_duration_ms(
+            result.requested_at, result.verified_at
+        ),
+    )
