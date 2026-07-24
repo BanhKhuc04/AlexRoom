@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,6 +11,7 @@ from alex_brain_tools import (
     TOOL_NAMES,
     BrainChatRequest,
     BrainRelevantContext,
+    brain_tool_schemas_for_provider,
 )
 from brain_service.app import AUTH_HEADER, create_app
 from brain_service.config import (
@@ -114,21 +114,80 @@ def test_warmup_uses_configured_model_and_bounded_timeout() -> None:
     assert call["payload"]["model"] == "qwen3.5:2b"
 
 
-def test_warmup_has_no_user_text_tools_or_execution_surface() -> None:
+def test_warmup_primes_canonical_system_and_full_legacy_tools() -> None:
     transport = RecordingTransport()
     service = BrainInferenceService(provider(transport))
 
     service.warmup(timeout_seconds=60)
 
     payload = transport.calls[0]["payload"]
-    assert "messages" not in payload
+    assert payload["messages"] == [
+        {"role": "system", "content": SYSTEM_INSTRUCTION},
+        {"role": "user", "content": ""},
+    ]
+    assert payload["tools"] == list(
+        brain_tool_schemas_for_provider(None)
+    )
     assert payload["think"] is False
     assert payload["stream"] is False
     assert payload["keep_alive"] == OLLAMA_KEEP_ALIVE == -1
     assert payload["options"]["num_predict"] == OLLAMA_WARMUP_NUM_PREDICT
-    assert "tools" not in payload
     assert "tool_calls" not in payload
-    assert "user" not in json.dumps(payload).lower()
+    assert payload["messages"][1]["content"] == ""
+
+
+def test_warmup_reuses_registry_builder_without_schema_copy() -> None:
+    transport = RecordingTransport()
+    service = BrainInferenceService(provider(transport))
+    canonical = (
+        {
+            "type": "function",
+            "function": {
+                "name": "canonical-sentinel",
+                "description": "registry owned",
+                "parameters": {},
+            },
+        },
+    )
+
+    with patch(
+        "brain_service.service.brain_tool_schemas_for_provider",
+        return_value=canonical,
+    ) as schema_builder:
+        service.warmup(timeout_seconds=60)
+
+    schema_builder.assert_called_once_with(None)
+    assert transport.calls[0]["payload"]["tools"] == list(canonical)
+
+
+def test_warmup_discards_tool_like_output_without_execution() -> None:
+    transport = RecordingTransport(
+        responses=[
+            {
+                "done": True,
+                "message": {
+                    "content": "discard me",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "mqtt_publish",
+                                "arguments": {"topic": "forbidden"},
+                            }
+                        }
+                    ],
+                },
+            }
+        ]
+    )
+    service = BrainInferenceService(provider(transport))
+
+    readiness = service.warmup(timeout_seconds=60)
+
+    assert readiness.ready is True
+    assert readiness.warmup == "ready"
+    assert len(transport.calls) == 1
+    assert "discard me" not in readiness.model_dump_json()
+    assert "mqtt_publish" not in readiness.model_dump_json()
 
 
 def test_normal_inference_keeps_model_resident() -> None:
@@ -221,7 +280,10 @@ def test_lifespan_warms_once_then_normal_request_runs_once() -> None:
     assert response.status_code == 200
     assert response.json()["assistant_text"] == "Đã hiểu."
     assert len(transport.calls) == 2
-    assert "messages" not in transport.calls[0]["payload"]
+    assert transport.calls[0]["payload"]["messages"][0] == {
+        "role": "system",
+        "content": SYSTEM_INSTRUCTION,
+    }
     assert len(transport.calls[1]["payload"]["messages"]) == 2
 
 

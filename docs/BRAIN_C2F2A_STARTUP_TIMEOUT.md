@@ -6,11 +6,14 @@ The production model for the measured two-CPU, CPU-only Brain VM is
 `qwen3.5:2b`. Model selection remains environment-owned through
 `ALEX_BRAIN_MODEL`; application logic does not hard-code it.
 
-At FastAPI startup, the Ollama-native provider sends one bounded empty chat
-request. This follows Ollama's documented preload contract and contains:
+At FastAPI startup, the Ollama-native provider sends one bounded canonical
+prefix chat request. It contains:
 
 - the configured model;
-- no user text and no tool schemas;
+- the canonical `SYSTEM_INSTRUCTION`;
+- the full legacy catalog returned by
+  `brain_tool_schemas_for_provider(None)`;
+- one empty, neutral user message;
 - `think=false` and `stream=false`;
 - `num_predict=1`;
 - `keep_alive=-1`.
@@ -21,9 +24,9 @@ negative `keep_alive` value as keeping the model resident:
 
 No assistant answer is stored or passed through the Brain contract. The warmup
 cannot execute tools, Core operations, MQTT, or hardware.
-No representative user prompt is sent: the current Ollama contract guarantees
-model preload for an empty request but does not guarantee reusable prompt-prefix
-caching, so adding prompt content would create cost without a reliable contract.
+No real-looking user command is sent. Provider output, including tool-call-like
+metadata, is discarded after checking only that upstream completed with
+`done=true`; it never enters `BrainChatResponse` validation or execution.
 
 Normal inference has a 25-second maximum provider timeout. The separate
 startup-only warmup budget defaults to 60 seconds because the measured cold
@@ -83,9 +86,85 @@ Acceptance sequence:
 7. Confirm provider timeout is 25 seconds and Core timeout remains 30 seconds.
 8. Confirm no Ollama request remains queued after the Core result.
 
+Exact real-VM acceptance commands:
+
+```bash
+sudo systemctl restart ollama.service
+sudo systemctl restart alex-brain.service
+
+for attempt in $(seq 1 75); do
+  ready="$(curl --silent --show-error http://127.0.0.1:8090/ready || true)"
+  printf '%s\n' "$ready"
+  printf '%s' "$ready" | grep -q '"ready":true' && break
+  sleep 1
+done
+
+ollama ps
+
+sudo /opt/alex/AlexRoom/.venv/bin/python - <<'PY'
+import json
+import time
+import urllib.request
+from pathlib import Path
+
+settings = {}
+for raw_line in Path("/etc/alex/alex-brain.env").read_text().splitlines():
+    line = raw_line.strip()
+    if line and not line.startswith("#") and "=" in line:
+        name, value = line.split("=", 1)
+        settings[name] = value
+
+headers = {
+    "Content-Type": "application/json",
+    "X-ALEX-Brain-Key": settings["ALEX_BRAIN_API_KEY"],
+}
+requests = (
+    {
+        "request_id": "c2f2a1-first-legacy",
+        "user_text": "Xin chào ALEX.",
+    },
+    {
+        "request_id": "c2f2a1-enhanced-zero-tools",
+        "user_text": "Xin chào ALEX.",
+        "allowed_tools": [],
+        "context": {
+            "context_schema_version": 1,
+            "knowledge_schema_version": 1,
+            "snapshot_captured_at": "2026-07-24T00:00:00Z",
+            "scope": "general",
+            "reason": "no_relevant_knowledge",
+            "incomplete": False,
+            "sources": [],
+            "sections": [],
+        },
+    },
+)
+
+for payload in requests:
+    request = urllib.request.Request(
+        "http://127.0.0.1:8090/v1/chat",
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    started = time.monotonic()
+    with urllib.request.urlopen(request, timeout=30) as response:
+        response.read()
+        elapsed = time.monotonic() - started
+        print(payload["request_id"], response.status, f"{elapsed:.3f}s")
+        if response.status != 200 or elapsed >= 25:
+            raise SystemExit("C2F.2a.1 acceptance failed")
+PY
+
+sudo journalctl -u ollama.service \
+  --since "10 minutes ago" --no-pager | tail -n 200
+```
+
 The acceptance target is operational, not a flaky CI assertion: the first
-normal request must avoid model-load latency, the warm enhanced path must
-complete within 30 seconds, and provider failure must occur before Core timeout.
+legacy request must return HTTP 200 within the provider's 25-second budget
+without paying the full canonical-prefix processing cost. The enhanced
+zero-tools request must also return HTTP 200, while provider failure continues
+to occur before Core timeout.
 
 ## Rollback
 

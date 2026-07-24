@@ -37,10 +37,11 @@ ALEX_BRAIN_MODEL=qwen3.5:2b
 
 The Ollama adapter owns and safely appends `/api/chat`. Normal inference sends
 `think=false`, `stream=false`, `temperature=0`, a bounded `num_predict`, and
-`keep_alive=-1`. Startup sends one bounded empty request with no tools or user
-text to preload the configured model. The provider API key remains optional
-for a trusted local server and is never reused as the client-facing Brain API
-key.
+`keep_alive=-1`. Startup sends one bounded canonical-prefix request using the
+same system instruction and full legacy tool schemas as normal production
+requests, plus an empty neutral user message. Its output is discarded. The
+provider API key remains optional for a trusted local server and is never
+reused as the client-facing Brain API key.
 
 Start the service on the Brain PC:
 

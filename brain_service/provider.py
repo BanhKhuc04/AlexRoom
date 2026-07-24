@@ -64,7 +64,13 @@ class BrainTextProvider(Protocol):
         tools: Sequence[Mapping[str, object]],
     ) -> ProviderReply: ...
 
-    def warmup(self, *, timeout_seconds: float) -> None: ...
+    def warmup(
+        self,
+        *,
+        timeout_seconds: float,
+        system_instruction: str,
+        tools: Sequence[Mapping[str, object]],
+    ) -> None: ...
 
 
 class DisabledProvider:
@@ -82,6 +88,12 @@ class DisabledProvider:
         del system_instruction, user_text, tools
         raise ProviderNotConfiguredError("provider_not_configured")
 
-    def warmup(self, *, timeout_seconds: float) -> None:
-        del timeout_seconds
+    def warmup(
+        self,
+        *,
+        timeout_seconds: float,
+        system_instruction: str,
+        tools: Sequence[Mapping[str, object]],
+    ) -> None:
+        del timeout_seconds, system_instruction, tools
         raise ProviderNotConfiguredError("provider_not_configured")

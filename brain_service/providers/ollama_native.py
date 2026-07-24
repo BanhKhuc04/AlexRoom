@@ -87,8 +87,14 @@ class OllamaNativeProvider:
         )
         return self._parse_response(upstream)
 
-    def warmup(self, *, timeout_seconds: float) -> None:
-        """Load the configured model without a user prompt or tool schemas."""
+    def warmup(
+        self,
+        *,
+        timeout_seconds: float,
+        system_instruction: str,
+        tools: Sequence[Mapping[str, object]],
+    ) -> None:
+        """Prime the canonical prefix without creating a Brain response."""
 
         if not self.configured:
             raise ProviderNotConfiguredError("provider_not_configured")
@@ -100,6 +106,14 @@ class OllamaNativeProvider:
             headers=headers,
             payload={
                 "model": self.model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": system_instruction,
+                    },
+                    {"role": "user", "content": ""},
+                ],
+                "tools": list(tools),
                 "think": False,
                 "stream": False,
                 "keep_alive": OLLAMA_KEEP_ALIVE,

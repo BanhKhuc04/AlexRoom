@@ -103,7 +103,11 @@ class BrainInferenceService:
             self._warmup_reason = None
             return self.readiness()
         try:
-            self.provider.warmup(timeout_seconds=timeout_seconds)
+            self.provider.warmup(
+                timeout_seconds=timeout_seconds,
+                system_instruction=SYSTEM_INSTRUCTION,
+                tools=brain_tool_schemas_for_provider(None),
+            )
         except ProviderNotConfiguredError:
             self._warmup_state = "not_configured"
             self._warmup_reason = "provider_not_configured"

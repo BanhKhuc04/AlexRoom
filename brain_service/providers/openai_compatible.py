@@ -124,10 +124,16 @@ class OpenAICompatibleProvider:
         )
         return self._parse_response(upstream)
 
-    def warmup(self, *, timeout_seconds: float) -> None:
+    def warmup(
+        self,
+        *,
+        timeout_seconds: float,
+        system_instruction: str,
+        tools: Sequence[Mapping[str, object]],
+    ) -> None:
         # A generic OpenAI-compatible endpoint has no portable preload
         # contract. Startup reports this provider as warmup-not-supported.
-        del timeout_seconds
+        del timeout_seconds, system_instruction, tools
 
     @staticmethod
     def _parse_response(upstream: dict[str, object]) -> ProviderReply:
