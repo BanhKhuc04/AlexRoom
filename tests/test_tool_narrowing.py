@@ -110,7 +110,6 @@ def test_multi_intent_fails_closed_without_tool_union() -> None:
 def test_exact_test_led_action_selects_only_relevant_candidate() -> None:
     _, context, result = result_for("Bật test_led của ESP01")
     assert [section.subject for section in context.sections] == [
-        "esp01",
         "esp01.test_led",
     ]
     assert result.selected_tool_names == ("set_test_led",)

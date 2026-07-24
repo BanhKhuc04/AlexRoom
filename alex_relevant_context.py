@@ -303,6 +303,7 @@ def _context_for_non_system_step(
         snapshot,
         capability_ids=capability_ids,
         reason=RelevantContextReason.SELECTED_EXPLICIT_ENTITY,
+        exact_mutation=True,
     )
 
 
@@ -312,6 +313,7 @@ def _device_detail_context(
     *,
     capability_ids: tuple[str, ...],
     reason: RelevantContextReason,
+    exact_mutation: bool = False,
 ) -> RelevantContext:
     assert isinstance(selected.data, DeviceDetailQueryData)
     data = selected.data
@@ -349,14 +351,15 @@ def _device_detail_context(
         capability.capability_id: capability
         for capability in device.capabilities
     }
-    sections = (
-        _device_section(device),
-        *(
-            _capability_section(capabilities[capability_id], device)
-            for capability_id in capability_ids
-            if capability_id in capabilities
-        ),
+    capability_sections = tuple(
+        _capability_section(capabilities[capability_id], device)
+        for capability_id in capability_ids
+        if capability_id in capabilities
     )
+    if exact_mutation and capability_sections:
+        sections = capability_sections
+    else:
+        sections = (_device_section(device), *capability_sections)
     return RelevantContext(
         knowledge_schema_version=selected.knowledge_schema_version,
         snapshot_captured_at=selected.snapshot_captured_at,

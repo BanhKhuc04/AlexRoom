@@ -135,7 +135,7 @@ BRAIN_TOOL_REGISTRY: Final[Mapping[ToolName, BrainToolDefinition]] = MappingProx
         "set_test_led": BrainToolDefinition(
             argument_model=SetTestLedArguments,
             access="mutation",
-            description="Propose setting the verified low-voltage ESP01 test LED.",
+            description="Set ESP01 test_led.",
             risk="safe_low_voltage_mutation",
             core_mapping=_immutable_mapping(
                 node_id="esp01",
@@ -199,17 +199,26 @@ def brain_tool_schemas_for_provider(
             for name in TOOL_NAMES
             if name in requested
         )
+    def _strip_titles(schema: dict[str, object] | list[object]) -> None:
+        if isinstance(schema, dict):
+            schema.pop("title", None)
+            for value in schema.values():
+                _strip_titles(value)
+        elif isinstance(schema, list):
+            for item in schema:
+                _strip_titles(item)
+
     for name in selected_names:
         definition = BRAIN_TOOL_REGISTRY[name]
+        parameters = deepcopy(definition.argument_model.model_json_schema())
+        _strip_titles(parameters)
         schemas.append(
             {
                 "type": "function",
                 "function": {
                     "name": name,
                     "description": definition.description,
-                    "parameters": deepcopy(
-                        definition.argument_model.model_json_schema()
-                    ),
+                    "parameters": parameters,
                 },
             }
         )

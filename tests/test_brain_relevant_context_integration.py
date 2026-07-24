@@ -405,7 +405,6 @@ def test_exact_test_led_context_is_factual_and_not_authorization() -> None:
     request = guarded_request("Bật test_led của esp01")
     encoded = context_json(request).lower()
     assert [item.subject for item in request.context.sections] == [
-        "esp01",
         "esp01.test_led",
     ]
     assert request.allowed_tools == ["set_test_led"]
