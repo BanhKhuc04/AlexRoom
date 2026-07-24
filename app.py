@@ -1468,22 +1468,18 @@ def v1_domain(domain: str) -> dict[str, Any]:
     return {"items": store.records(domain), "source": "local_software"}
 
 # --- Voice Integration ---
-try:
-    from alex_local_stt import FasterWhisperSTTProvider
-    voice_stt = FasterWhisperSTTProvider(model_size="tiny", device="cpu", compute_type="int8")
-except ImportError:
-    from alex_stt import DeterministicSTTProvider
-    voice_stt = DeterministicSTTProvider()
+from alex_stt import BrainSTTProvider, DeterministicSTTProvider
+from alex_tts import BrainTTSProvider, DeterministicTTSProvider
 
-try:
-    from alex_local_tts import LocalTTSProvider, NullPlaybackSink
-    voice_tts = LocalTTSProvider(executable_path="echo", model_path="") # minimal safe default
-    voice_playback = NullPlaybackSink()
-except ImportError:
-    from alex_tts import DeterministicTTSProvider
+if CORE_BRAIN_CONFIG.enabled and CORE_BRAIN_CONFIG.configured:
+    voice_stt = BrainSTTProvider(core_brain_client)
+    voice_tts = BrainTTSProvider(core_brain_client)
+else:
+    voice_stt = DeterministicSTTProvider()
     voice_tts = DeterministicTTSProvider()
-    from unittest.mock import Mock
-    voice_playback = Mock()
+
+from unittest.mock import Mock
+voice_playback = Mock()
 
 import hmac
 

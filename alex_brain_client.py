@@ -113,6 +113,38 @@ def build_brain_chat_url(base_url: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
+def build_brain_stt_url(base_url: str) -> str:
+    """Build a fixed /v1/stt target."""
+    parsed = urlsplit(base_url.strip())
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise BrainClientError("brain_not_configured")
+    path = f"{parsed.path.rstrip('/')}/v1/stt"
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+def build_brain_tts_url(base_url: str) -> str:
+    """Build a fixed /v1/tts target."""
+    parsed = urlsplit(base_url.strip())
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise BrainClientError("brain_not_configured")
+    path = f"{parsed.path.rstrip('/')}/v1/tts"
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
 class CoreBrainClient:
     """Small authenticated HTTP client. It has no Core execution capability."""
 
@@ -179,3 +211,100 @@ class CoreBrainClient:
         if response.request_id != request.request_id:
             raise BrainClientError("invalid_brain_response")
         return response
+
+    def transcribe(self, session_id: str, request_id: str, audio_base64: str, language: str = "vi") -> dict:
+        if not self.config.enabled:
+            raise BrainClientError("brain_disabled")
+        if not self.config.configured:
+            raise BrainClientError("brain_not_configured")
+
+        url = build_brain_stt_url(self.config.url)
+        payload = json.dumps({
+            "session_id": session_id,
+            "request_id": request_id,
+            "audio_base64": audio_base64,
+            "language": language
+        }).encode("utf-8")
+
+        outbound = Request(
+            url,
+            data=payload,
+            headers={
+                BRAIN_AUTH_HEADER: self.config.client_key,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+
+        try:
+            with self._opener(outbound, timeout=self.config.timeout_seconds) as upstream:
+                body = upstream.read(MAX_BRAIN_RESPONSE_BYTES + 1)
+        except HTTPError as error:
+            if error.code in {408, 504}:
+                raise BrainClientError("brain_timeout", http_status=error.code) from None
+            raise BrainClientError("brain_unavailable", http_status=error.code) from None
+        except (socket.timeout, TimeoutError):
+            raise BrainClientError("brain_timeout") from None
+        except URLError as error:
+            if isinstance(error.reason, (socket.timeout, TimeoutError)):
+                raise BrainClientError("brain_timeout") from None
+            raise BrainClientError("brain_unavailable") from None
+        except OSError:
+            raise BrainClientError("brain_unavailable") from None
+
+        if len(body) > MAX_BRAIN_RESPONSE_BYTES:
+            raise BrainClientError("invalid_brain_response")
+
+        try:
+            return json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise BrainClientError("invalid_brain_response") from None
+
+    def synthesize(self, session_id: str, request_id: str, text: str) -> dict:
+        if not self.config.enabled:
+            raise BrainClientError("brain_disabled")
+        if not self.config.configured:
+            raise BrainClientError("brain_not_configured")
+
+        url = build_brain_tts_url(self.config.url)
+        payload = json.dumps({
+            "session_id": session_id,
+            "request_id": request_id,
+            "text": text
+        }).encode("utf-8")
+
+        outbound = Request(
+            url,
+            data=payload,
+            headers={
+                BRAIN_AUTH_HEADER: self.config.client_key,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+
+        try:
+            with self._opener(outbound, timeout=self.config.timeout_seconds) as upstream:
+                body = upstream.read(MAX_BRAIN_RESPONSE_BYTES + 1)
+        except HTTPError as error:
+            if error.code in {408, 504}:
+                raise BrainClientError("brain_timeout", http_status=error.code) from None
+            raise BrainClientError("brain_unavailable", http_status=error.code) from None
+        except (socket.timeout, TimeoutError):
+            raise BrainClientError("brain_timeout") from None
+        except URLError as error:
+            if isinstance(error.reason, (socket.timeout, TimeoutError)):
+                raise BrainClientError("brain_timeout") from None
+            raise BrainClientError("brain_unavailable") from None
+        except OSError:
+            raise BrainClientError("brain_unavailable") from None
+
+        if len(body) > MAX_BRAIN_RESPONSE_BYTES:
+            raise BrainClientError("invalid_brain_response")
+
+        try:
+            return json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise BrainClientError("invalid_brain_response") from None

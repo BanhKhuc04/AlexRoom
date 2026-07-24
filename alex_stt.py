@@ -52,3 +52,44 @@ class DeterministicSTTProvider:
             return self.next_result
             
         raise STTError(STTErrorCode.INTERNAL_FAILURE, "DeterministicSTTProvider not configured for result")
+
+
+import base64
+import asyncio
+from alex_brain_client import CoreBrainClient, BrainClientError
+
+class BrainSTTProvider:
+    """Remote STT provider delegating speech recognition to ALEX Brain PC."""
+
+    def __init__(self, client: CoreBrainClient) -> None:
+        self.client = client
+
+    async def transcribe(self, session_id: str, request_id: str, audio_data: bytes, **kwargs: Any) -> STTResult:
+        if not audio_data:
+            raise STTError(STTErrorCode.INTERNAL_FAILURE, "Empty audio data provided")
+
+        audio_b64 = base64.b64encode(audio_data).decode("utf-8")
+        try:
+            loop = asyncio.get_running_loop()
+            resp = await loop.run_in_executor(
+                None,
+                self.client.transcribe,
+                session_id,
+                request_id,
+                audio_b64
+            )
+            transcript = resp.get("transcript", "")
+            return STTResult(
+                session_id=session_id,
+                request_id=request_id,
+                transcript=transcript,
+                is_final=resp.get("is_final", True),
+                provider=resp.get("provider", "brain_stt"),
+                metadata=resp.get("metadata", {})
+            )
+        except BrainClientError as e:
+            code = STTErrorCode.TRANSCRIPTION_TIMEOUT if e.code == "brain_timeout" else STTErrorCode.STT_UNAVAILABLE
+            raise STTError(code, f"Brain STT error: {e.code}") from e
+        except Exception as e:
+            raise STTError(STTErrorCode.INTERNAL_FAILURE, str(e)) from e
+

@@ -53,3 +53,43 @@ class DeterministicTTSProvider:
             raise TTSError(TTSErrorCode.INTERNAL_FAILURE, "Empty text")
             
         raise TTSError(TTSErrorCode.INTERNAL_FAILURE, "DeterministicTTSProvider not configured for result")
+
+
+import base64
+import asyncio
+from alex_brain_client import CoreBrainClient, BrainClientError
+
+class BrainTTSProvider:
+    """Remote TTS provider delegating speech synthesis to ALEX Brain PC."""
+
+    def __init__(self, client: CoreBrainClient) -> None:
+        self.client = client
+
+    async def synthesize(self, session_id: str, request_id: str, text: str, **kwargs: Any) -> TTSResult:
+        if not text:
+            raise TTSError(TTSErrorCode.INTERNAL_FAILURE, "Empty text provided")
+
+        try:
+            loop = asyncio.get_running_loop()
+            resp = await loop.run_in_executor(
+                None,
+                self.client.synthesize,
+                session_id,
+                request_id,
+                text
+            )
+            audio_b64 = resp.get("audio_base64", "")
+            audio_bytes = base64.b64decode(audio_b64) if audio_b64 else b""
+            return TTSResult(
+                session_id=session_id,
+                request_id=request_id,
+                audio_data=audio_bytes,
+                provider=resp.get("provider", "brain_tts"),
+                metadata=resp.get("metadata", {})
+            )
+        except BrainClientError as e:
+            code = TTSErrorCode.SYNTHESIS_TIMEOUT if e.code == "brain_timeout" else TTSErrorCode.TTS_UNAVAILABLE
+            raise TTSError(code, f"Brain TTS error: {e.code}") from e
+        except Exception as e:
+            raise TTSError(TTSErrorCode.INTERNAL_FAILURE, str(e)) from e
+
