@@ -59,6 +59,12 @@ from alex_intelligence_fast_path import (
     evaluate_intelligence_fast_path,
     intelligence_fast_path_enabled,
 )
+from alex_intelligence_runtime import BRAIN_UNAVAILABLE_TEXT
+from alex_brain_resilience_runtime import (
+    BrainRequestLease,
+    LiveBrainCircuitBreaker,
+    brain_circuit_breaker_enabled,
+)
 from alex_knowledge import build_system_knowledge_snapshot
 from alex_knowledge_contracts import SystemKnowledgeSnapshot
 
@@ -105,6 +111,9 @@ BRAIN_PORT = int(os.getenv("ALEX_BRAIN_PORT", "22"))
 CORE_BRAIN_CONFIG = CoreBrainConfig.from_env(os.environ)
 ALEX_INTELLIGENCE_SHADOW_ENABLED = intelligence_shadow_enabled(os.environ)
 ALEX_INTELLIGENCE_FAST_PATH_ENABLED = intelligence_fast_path_enabled(
+    os.environ
+)
+ALEX_BRAIN_CIRCUIT_BREAKER_ENABLED = brain_circuit_breaker_enabled(
     os.environ
 )
 
@@ -1048,6 +1057,61 @@ core_brain_integration = CoreBrainIntegration(
     safe_automation_executor=core_brain_automation_executor,
     room_mode_executor=core_brain_room_mode_executor,
 )
+# Production currently uses one uvicorn worker. This owner is intentionally
+# process-local, starts CLOSED, and is never persisted to SQLite.
+brain_circuit_breaker = LiveBrainCircuitBreaker()
+
+
+def _brain_unavailable_chat_response(
+    payload: BrainChatRequest,
+) -> CoreBrainChatResponse:
+    return CoreBrainChatResponse(
+        request_id=payload.request_id,
+        assistant_text=BRAIN_UNAVAILABLE_TEXT,
+        proposed_tool_calls=[],
+        tool_results=[],
+    )
+
+
+def _core_brain_chat_with_live_breaker(
+    payload: BrainChatRequest,
+) -> CoreBrainChatResponse:
+    if not ALEX_BRAIN_CIRCUIT_BREAKER_ENABLED:
+        return core_brain_integration.chat(payload)
+
+    try:
+        permission = brain_circuit_breaker.before_request()
+    except Exception:
+        # Breaker infrastructure must not become a new availability dependency.
+        return core_brain_integration.chat(payload)
+    if not permission.decision.allowed:
+        return _brain_unavailable_chat_response(payload)
+
+    lease = permission.lease
+    assert isinstance(lease, BrainRequestLease)
+    try:
+        response = core_brain_integration.chat(payload)
+    except BrainClientError as error:
+        try:
+            brain_circuit_breaker.record_failure_code(
+                lease,
+                error.code,
+                http_status=error.http_status,
+            )
+        except Exception:
+            pass
+        raise
+    except BaseException:
+        try:
+            brain_circuit_breaker.abandon(lease)
+        except Exception:
+            pass
+        raise
+    try:
+        brain_circuit_breaker.record_success(lease)
+    except Exception:
+        pass
+    return response
 
 
 @app.post("/api/v1/commands")
@@ -1205,7 +1269,7 @@ def v1_brain_chat(
             # Shadow observation must never alter the legacy request contract.
             pass
     try:
-        return core_brain_integration.chat(payload)
+        return _core_brain_chat_with_live_breaker(payload)
     except BrainClientError as error:
         status_codes = {
             "brain_disabled": 503,

@@ -39,6 +39,7 @@ class BrainFailureReason(str, Enum):
     AUTHENTICATION_REQUIRED = "authentication_required"
     AUTHENTICATION_NOT_CONFIGURED = "authentication_not_configured"
     INVALID_CREDENTIAL = "invalid_credential"
+    CORE_BRAIN_DISABLED = "core_brain_disabled"
     CORE_BRAIN_NOT_CONFIGURED = "core_brain_not_configured"
     INVALID_REQUEST = "invalid_request"
     INVALID_RESPONSE_CONTRACT = "invalid_response_contract"
@@ -243,6 +244,27 @@ def record_brain_failure(
     now = _validate_monotonic(now_monotonic)
     if failure.kind in BREAKER_IMMEDIATE_OPEN_FAILURES:
         return _open_after_failure(state, failure, now)
+    if (
+        state.state is BrainCircuitState.HALF_OPEN
+        and failure.kind not in BREAKER_COUNTED_FAILURES
+    ):
+        if failure.kind is BrainFailureKind.BAD_REQUEST:
+            # Caller fault did not prove Brain unavailable. Release the probe
+            # reservation without resetting the existing cooldown.
+            return replace(
+                state,
+                state=BrainCircuitState.OPEN,
+                last_failure_kind=failure.kind,
+                last_failure_reason=failure.reason,
+            )
+        # A malformed/unknown probe is not success and must not leave the
+        # circuit permanently stuck in HALF_OPEN.
+        return _open_after_failure(
+            state,
+            failure,
+            now,
+            failures=state.consecutive_failures,
+        )
     if failure.kind not in BREAKER_COUNTED_FAILURES:
         if state.state is not BrainCircuitState.CLOSED:
             return state
@@ -273,6 +295,16 @@ def classify_brain_failure(
 ) -> BrainFailure:
     """Map current bounded Core/Brain error codes without retaining raw input."""
 
+    if http_status in {401, 403}:
+        return BrainFailure(
+            BrainFailureKind.AUTH_FAILURE,
+            BrainFailureReason.INVALID_CREDENTIAL,
+        )
+    if http_status in {400, 404, 409, 422}:
+        return BrainFailure(
+            BrainFailureKind.BAD_REQUEST,
+            BrainFailureReason.INVALID_REQUEST,
+        )
     if error_code in {"brain_timeout", "provider_timeout"}:
         return BrainFailure(
             BrainFailureKind.TIMEOUT,
@@ -306,6 +338,7 @@ def classify_brain_failure(
         )
     if error_code in {
         "authentication_not_configured",
+        "brain_disabled",
         "brain_not_configured",
     }:
         return BrainFailure(
@@ -313,7 +346,11 @@ def classify_brain_failure(
             (
                 BrainFailureReason.AUTHENTICATION_NOT_CONFIGURED
                 if error_code == "authentication_not_configured"
-                else BrainFailureReason.CORE_BRAIN_NOT_CONFIGURED
+                else (
+                    BrainFailureReason.CORE_BRAIN_DISABLED
+                    if error_code == "brain_disabled"
+                    else BrainFailureReason.CORE_BRAIN_NOT_CONFIGURED
+                )
             ),
         )
     if error_code == "invalid_request" or http_status == 422:
@@ -329,6 +366,16 @@ def classify_brain_failure(
             BrainFailureKind.CONTRACT_ERROR,
             BrainFailureReason.INVALID_RESPONSE_CONTRACT,
         )
+    if http_status in {408, 504}:
+        return BrainFailure(
+            BrainFailureKind.TIMEOUT,
+            BrainFailureReason.BRAIN_TIMEOUT,
+        )
+    if http_status == 503:
+        return BrainFailure(
+            BrainFailureKind.PROVIDER_UNAVAILABLE,
+            BrainFailureReason.PROVIDER_UNAVAILABLE,
+        )
     if error_code in {
         "brain_unavailable",
         "connection_refused",
@@ -342,21 +389,6 @@ def classify_brain_failure(
                 if error_code == "network_unreachable"
                 else BrainFailureReason.CONNECTION_FAILED
             ),
-        )
-    if http_status in {401, 403}:
-        return BrainFailure(
-            BrainFailureKind.AUTH_FAILURE,
-            BrainFailureReason.INVALID_CREDENTIAL,
-        )
-    if http_status in {408, 504}:
-        return BrainFailure(
-            BrainFailureKind.TIMEOUT,
-            BrainFailureReason.BRAIN_TIMEOUT,
-        )
-    if http_status == 503:
-        return BrainFailure(
-            BrainFailureKind.PROVIDER_UNAVAILABLE,
-            BrainFailureReason.PROVIDER_UNAVAILABLE,
         )
     return BrainFailure(
         BrainFailureKind.UNKNOWN,

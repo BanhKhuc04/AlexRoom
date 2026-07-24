@@ -31,9 +31,15 @@ BrainClientErrorCode = Literal[
 class BrainClientError(RuntimeError):
     """Bounded Core-side failure; upstream response bodies are never exposed."""
 
-    def __init__(self, code: BrainClientErrorCode) -> None:
+    def __init__(
+        self,
+        code: BrainClientErrorCode,
+        *,
+        http_status: int | None = None,
+    ) -> None:
         super().__init__(code)
         self.code = code
+        self.http_status = http_status
 
 
 @dataclass(frozen=True)
@@ -144,8 +150,14 @@ class CoreBrainClient:
                 body = upstream.read(MAX_BRAIN_RESPONSE_BYTES + 1)
         except HTTPError as error:
             if error.code in {408, 504}:
-                raise BrainClientError("brain_timeout") from None
-            raise BrainClientError("brain_unavailable") from None
+                raise BrainClientError(
+                    "brain_timeout",
+                    http_status=error.code,
+                ) from None
+            raise BrainClientError(
+                "brain_unavailable",
+                http_status=error.code,
+            ) from None
         except (socket.timeout, TimeoutError):
             raise BrainClientError("brain_timeout") from None
         except URLError as error:
