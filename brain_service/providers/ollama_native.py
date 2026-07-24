@@ -17,10 +17,13 @@ from brain_service.providers.openai_compatible import (
 
 OLLAMA_CHAT_PATH = "/api/chat"
 OLLAMA_NUM_PREDICT = 512
+OLLAMA_KEEP_ALIVE = -1
+OLLAMA_WARMUP_NUM_PREDICT = 1
 
 
 class OllamaNativeProvider:
     name = "ollama_native"
+    supports_warmup = True
 
     def __init__(
         self,
@@ -68,6 +71,7 @@ class OllamaNativeProvider:
             ],
             "think": False,
             "stream": False,
+            "keep_alive": OLLAMA_KEEP_ALIVE,
             "options": {
                 "temperature": 0,
                 "num_predict": OLLAMA_NUM_PREDICT,
@@ -82,6 +86,32 @@ class OllamaNativeProvider:
             timeout_seconds=self.timeout_seconds,
         )
         return self._parse_response(upstream)
+
+    def warmup(self, *, timeout_seconds: float) -> None:
+        """Load the configured model without a user prompt or tool schemas."""
+
+        if not self.configured:
+            raise ProviderNotConfiguredError("provider_not_configured")
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        upstream = self.transport.post_json(
+            url=self.url,
+            headers=headers,
+            payload={
+                "model": self.model,
+                "think": False,
+                "stream": False,
+                "keep_alive": OLLAMA_KEEP_ALIVE,
+                "options": {
+                    "temperature": 0,
+                    "num_predict": OLLAMA_WARMUP_NUM_PREDICT,
+                },
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        if upstream.get("done") is not True:
+            raise InvalidProviderResponseError("invalid_provider_response")
 
     @staticmethod
     def _parse_response(upstream: dict[str, object]) -> ProviderReply:

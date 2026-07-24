@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import logging
 import time
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, Request
@@ -24,6 +25,7 @@ from brain_service.service import (
     BrainErrorResponse,
     BrainHealthResponse,
     BrainInferenceService,
+    BrainReadinessResponse,
 )
 
 
@@ -95,7 +97,24 @@ def create_app(
 ) -> FastAPI:
     resolved_config = config or BrainServiceConfig.from_environment()
     inference_service = service or BrainInferenceService(build_provider(resolved_config))
-    brain_app = FastAPI(title="ALEX Brain", version="v1")
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        readiness = inference_service.warmup(
+            timeout_seconds=resolved_config.warmup_timeout_seconds
+        )
+        _log_outcome(
+            "/startup",
+            readiness.warmup,
+            provider=inference_service.provider_name,
+        )
+        yield
+
+    brain_app = FastAPI(
+        title="ALEX Brain",
+        version="v1",
+        lifespan=lifespan,
+    )
 
     @brain_app.exception_handler(BrainHttpError)
     async def handle_brain_http_error(_: Request, error: BrainHttpError) -> JSONResponse:
@@ -152,6 +171,16 @@ def create_app(
     def health() -> BrainHealthResponse:
         response = inference_service.health()
         _log_outcome("/health", "ok", provider=inference_service.provider_name)
+        return response
+
+    @brain_app.get("/ready", response_model=BrainReadinessResponse)
+    def ready() -> BrainReadinessResponse:
+        response = inference_service.readiness()
+        _log_outcome(
+            "/ready",
+            response.status,
+            provider=inference_service.provider_name,
+        )
         return response
 
     @brain_app.post(

@@ -20,8 +20,11 @@ from brain_service.provider import (
     BrainTextProvider,
     DisabledProvider,
     InvalidProviderResponseError,
+    ProviderNotConfiguredError,
     ProviderReply,
+    ProviderTimeoutError,
     ProviderToolProposal,
+    ProviderUnavailableError,
 )
 from brain_service.refusal_policy import apply_forbidden_action_refusal
 
@@ -46,6 +49,21 @@ class BrainHealthResponse(StrictContractModel):
     provider: Literal["not_configured", "configured"] = "not_configured"
 
 
+class BrainReadinessResponse(StrictContractModel):
+    status: Literal["ready", "degraded", "not_ready"]
+    ready: bool
+    service: Literal["alex-brain"] = "alex-brain"
+    provider: str = Field(min_length=1, max_length=64)
+    warmup: Literal[
+        "not_started",
+        "ready",
+        "degraded",
+        "not_configured",
+        "not_supported",
+    ]
+    reason: str | None = Field(default=None, max_length=64)
+
+
 class BrainErrorDetail(StrictContractModel):
     code: str = Field(min_length=1, max_length=64)
     message: str = Field(min_length=1, max_length=160)
@@ -61,10 +79,65 @@ class BrainInferenceService:
 
     def __init__(self, provider: BrainTextProvider | None = None) -> None:
         self.provider = provider or DisabledProvider()
+        self._warmup_state: Literal[
+            "not_started",
+            "ready",
+            "degraded",
+            "not_configured",
+            "not_supported",
+        ] = "not_started"
+        self._warmup_reason: str | None = None
 
     def health(self) -> BrainHealthResponse:
         return BrainHealthResponse(
             provider="configured" if self.provider.configured else "not_configured"
+        )
+
+    def warmup(self, *, timeout_seconds: float) -> BrainReadinessResponse:
+        if not self.provider.configured:
+            self._warmup_state = "not_configured"
+            self._warmup_reason = "provider_not_configured"
+            return self.readiness()
+        if not getattr(self.provider, "supports_warmup", False):
+            self._warmup_state = "not_supported"
+            self._warmup_reason = None
+            return self.readiness()
+        try:
+            self.provider.warmup(timeout_seconds=timeout_seconds)
+        except ProviderNotConfiguredError:
+            self._warmup_state = "not_configured"
+            self._warmup_reason = "provider_not_configured"
+        except ProviderTimeoutError:
+            self._warmup_state = "degraded"
+            self._warmup_reason = "provider_timeout"
+        except ProviderUnavailableError:
+            self._warmup_state = "degraded"
+            self._warmup_reason = "provider_unavailable"
+        except InvalidProviderResponseError:
+            self._warmup_state = "degraded"
+            self._warmup_reason = "invalid_provider_response"
+        except Exception:
+            self._warmup_state = "degraded"
+            self._warmup_reason = "warmup_failed"
+        else:
+            self._warmup_state = "ready"
+            self._warmup_reason = None
+        return self.readiness()
+
+    def readiness(self) -> BrainReadinessResponse:
+        ready = self._warmup_state in {"ready", "not_supported"}
+        if ready:
+            status: Literal["ready", "degraded", "not_ready"] = "ready"
+        elif self._warmup_state == "degraded":
+            status = "degraded"
+        else:
+            status = "not_ready"
+        return BrainReadinessResponse(
+            status=status,
+            ready=ready,
+            provider=self.provider.name,
+            warmup=self._warmup_state,
+            reason=self._warmup_reason,
         )
 
     def chat(self, request: BrainChatRequest) -> BrainChatResponse:

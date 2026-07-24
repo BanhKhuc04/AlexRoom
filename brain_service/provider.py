@@ -54,6 +54,7 @@ class ProviderReply:
 class BrainTextProvider(Protocol):
     name: str
     configured: bool
+    supports_warmup: bool
 
     def infer(
         self,
@@ -63,10 +64,13 @@ class BrainTextProvider(Protocol):
         tools: Sequence[Mapping[str, object]],
     ) -> ProviderReply: ...
 
+    def warmup(self, *, timeout_seconds: float) -> None: ...
+
 
 class DisabledProvider:
     name = "disabled"
     configured = False
+    supports_warmup = False
 
     def infer(
         self,
@@ -76,4 +80,8 @@ class DisabledProvider:
         tools: Sequence[Mapping[str, object]],
     ) -> ProviderReply:
         del system_instruction, user_text, tools
+        raise ProviderNotConfiguredError("provider_not_configured")
+
+    def warmup(self, *, timeout_seconds: float) -> None:
+        del timeout_seconds
         raise ProviderNotConfiguredError("provider_not_configured")

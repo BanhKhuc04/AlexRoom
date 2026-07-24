@@ -75,6 +75,7 @@ class UrllibJsonTransport:
 
 class OpenAICompatibleProvider:
     name = "openai_compatible"
+    supports_warmup = False
 
     def __init__(
         self,
@@ -122,6 +123,11 @@ class OpenAICompatibleProvider:
             timeout_seconds=self.timeout_seconds,
         )
         return self._parse_response(upstream)
+
+    def warmup(self, *, timeout_seconds: float) -> None:
+        # A generic OpenAI-compatible endpoint has no portable preload
+        # contract. Startup reports this provider as warmup-not-supported.
+        del timeout_seconds
 
     @staticmethod
     def _parse_response(upstream: dict[str, object]) -> ProviderReply:

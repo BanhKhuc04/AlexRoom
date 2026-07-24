@@ -10,8 +10,11 @@ PROVIDER_URL_ENV = "ALEX_BRAIN_PROVIDER_URL"
 PROVIDER_MODEL_ENV = "ALEX_BRAIN_MODEL"
 PROVIDER_API_KEY_ENV = "ALEX_BRAIN_PROVIDER_API_KEY"
 PROVIDER_TIMEOUT_ENV = "ALEX_BRAIN_PROVIDER_TIMEOUT_SECONDS"
-DEFAULT_PROVIDER_TIMEOUT_SECONDS = 30.0
-MAX_PROVIDER_TIMEOUT_SECONDS = 300.0
+WARMUP_TIMEOUT_ENV = "ALEX_BRAIN_WARMUP_TIMEOUT_SECONDS"
+DEFAULT_PROVIDER_TIMEOUT_SECONDS = 25.0
+MAX_PROVIDER_TIMEOUT_SECONDS = 25.0
+DEFAULT_WARMUP_TIMEOUT_SECONDS = 60.0
+MAX_WARMUP_TIMEOUT_SECONDS = 120.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,10 +27,22 @@ class BrainServiceConfig:
     provider_model: str | None = None
     provider_api_key: str | None = None
     provider_timeout_seconds: float = DEFAULT_PROVIDER_TIMEOUT_SECONDS
+    warmup_timeout_seconds: float = DEFAULT_WARMUP_TIMEOUT_SECONDS
 
     @classmethod
     def from_environment(cls) -> "BrainServiceConfig":
-        timeout = cls._parse_timeout(os.getenv(PROVIDER_TIMEOUT_ENV))
+        timeout = cls._parse_bounded_timeout(
+            os.getenv(PROVIDER_TIMEOUT_ENV),
+            env_name=PROVIDER_TIMEOUT_ENV,
+            default=DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+            maximum=MAX_PROVIDER_TIMEOUT_SECONDS,
+        )
+        warmup_timeout = cls._parse_bounded_timeout(
+            os.getenv(WARMUP_TIMEOUT_ENV),
+            env_name=WARMUP_TIMEOUT_ENV,
+            default=DEFAULT_WARMUP_TIMEOUT_SECONDS,
+            maximum=MAX_WARMUP_TIMEOUT_SECONDS,
+        )
         return cls(
             api_key=os.getenv(BRAIN_API_KEY_ENV),
             provider=os.getenv(PROVIDER_ENV, "disabled").strip().lower(),
@@ -35,19 +50,26 @@ class BrainServiceConfig:
             provider_model=os.getenv(PROVIDER_MODEL_ENV),
             provider_api_key=os.getenv(PROVIDER_API_KEY_ENV),
             provider_timeout_seconds=timeout,
+            warmup_timeout_seconds=warmup_timeout,
         )
 
     @staticmethod
-    def _parse_timeout(raw_value: str | None) -> float:
+    def _parse_bounded_timeout(
+        raw_value: str | None,
+        *,
+        env_name: str,
+        default: float,
+        maximum: float,
+    ) -> float:
         if raw_value is None:
-            return DEFAULT_PROVIDER_TIMEOUT_SECONDS
+            return default
         try:
             value = float(raw_value)
         except ValueError as error:
-            raise ValueError(f"{PROVIDER_TIMEOUT_ENV} must be numeric") from error
-        if not 0 < value <= MAX_PROVIDER_TIMEOUT_SECONDS:
+            raise ValueError(f"{env_name} must be numeric") from error
+        if not 0 < value <= maximum:
             raise ValueError(
-                f"{PROVIDER_TIMEOUT_ENV} must be greater than 0 and at most "
-                f"{MAX_PROVIDER_TIMEOUT_SECONDS:g}"
+                f"{env_name} must be greater than 0 and at most "
+                f"{maximum:g}"
             )
         return value

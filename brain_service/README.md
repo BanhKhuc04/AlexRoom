@@ -22,7 +22,8 @@ ALEX_BRAIN_PROVIDER=ollama_native
 ALEX_BRAIN_PROVIDER_URL=http://127.0.0.1:11434/v1/chat/completions
 ALEX_BRAIN_MODEL=local-model
 ALEX_BRAIN_PROVIDER_API_KEY=optional-provider-secret
-ALEX_BRAIN_PROVIDER_TIMEOUT_SECONDS=30
+ALEX_BRAIN_PROVIDER_TIMEOUT_SECONDS=25
+ALEX_BRAIN_WARMUP_TIMEOUT_SECONDS=60
 ```
 
 For `openai_compatible`, `ALEX_BRAIN_PROVIDER_URL` is the complete
@@ -31,13 +32,15 @@ chat-completions endpoint. For `ollama_native`, configure only the server base:
 ```text
 ALEX_BRAIN_PROVIDER=ollama_native
 ALEX_BRAIN_PROVIDER_URL=http://127.0.0.1:11434
-ALEX_BRAIN_MODEL=qwen3.5:4b
+ALEX_BRAIN_MODEL=qwen3.5:2b
 ```
 
-The Ollama adapter owns and safely appends `/api/chat`. It sends `think=false`,
-`stream=false`, `temperature=0`, and a bounded `num_predict`. The provider API
-key remains optional for a trusted local server and is never reused as the
-client-facing Brain API key.
+The Ollama adapter owns and safely appends `/api/chat`. Normal inference sends
+`think=false`, `stream=false`, `temperature=0`, a bounded `num_predict`, and
+`keep_alive=-1`. Startup sends one bounded empty request with no tools or user
+text to preload the configured model. The provider API key remains optional
+for a trusted local server and is never reused as the client-facing Brain API
+key.
 
 Start the service on the Brain PC:
 
@@ -45,9 +48,10 @@ Start the service on the Brain PC:
 python -m uvicorn brain_service.app:app --host 127.0.0.1 --port 8090
 ```
 
-`GET /health` is intentionally unauthenticated. `provider=configured` means
-only that the provider URL and model are configured; it is not a reachability
-or inference-health claim.
+`GET /health` remains the backward-compatible unauthenticated liveness and
+configuration endpoint. `GET /ready` additionally reports the startup warmup
+state. `provider=configured` on `/health` alone is not a reachability or
+inference-health claim.
 
 Keep the service on localhost or a private LAN/Tailscale address protected by
 host firewall rules. Do not bind it to a public interface.
@@ -59,8 +63,9 @@ For the operator-verified native Ollama setup, configure the Brain process:
 ```powershell
 $env:ALEX_BRAIN_PROVIDER = "ollama_native"
 $env:ALEX_BRAIN_PROVIDER_URL = "http://127.0.0.1:11434"
-$env:ALEX_BRAIN_MODEL = "qwen3.5:4b"
-$env:ALEX_BRAIN_PROVIDER_TIMEOUT_SECONDS = "30"
+$env:ALEX_BRAIN_MODEL = "qwen3.5:2b"
+$env:ALEX_BRAIN_PROVIDER_TIMEOUT_SECONDS = "25"
+$env:ALEX_BRAIN_WARMUP_TIMEOUT_SECONDS = "60"
 python -m uvicorn brain_service.app:app --host 127.0.0.1 --port 8090
 ```
 
