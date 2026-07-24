@@ -52,6 +52,12 @@ from alex_intelligence_shadow import (
     IntelligenceShadowResult,
     intelligence_shadow_enabled,
     observe_intelligence_shadow,
+    observe_precomputed_intelligence_shadow,
+)
+from alex_intelligence_fast_path import (
+    IntelligenceFastPathResult,
+    evaluate_intelligence_fast_path,
+    intelligence_fast_path_enabled,
 )
 from alex_knowledge import build_system_knowledge_snapshot
 from alex_knowledge_contracts import SystemKnowledgeSnapshot
@@ -98,6 +104,9 @@ BRAIN_HOST = os.getenv("ALEX_BRAIN_HOST")
 BRAIN_PORT = int(os.getenv("ALEX_BRAIN_PORT", "22"))
 CORE_BRAIN_CONFIG = CoreBrainConfig.from_env(os.environ)
 ALEX_INTELLIGENCE_SHADOW_ENABLED = intelligence_shadow_enabled(os.environ)
+ALEX_INTELLIGENCE_FAST_PATH_ENABLED = intelligence_fast_path_enabled(
+    os.environ
+)
 
 DEVICE_ID = "esp01"
 TOPIC_PREFIX = f"alex/device/{DEVICE_ID}"
@@ -1001,6 +1010,20 @@ def _observe_intelligence_shadow(
     )
 
 
+def _evaluate_intelligence_fast_path(
+    payload: BrainChatRequest,
+) -> IntelligenceFastPathResult:
+    captured_at = utc_now_iso()
+    return evaluate_intelligence_fast_path(
+        enabled=ALEX_INTELLIGENCE_FAST_PATH_ENABLED,
+        user_text=payload.user_text,
+        snapshot_factory=lambda: _build_intelligence_shadow_snapshot(
+            captured_at=captured_at,
+        ),
+        now_monotonic=time.monotonic(),
+    )
+
+
 core_brain_mission_executor = StoredSafeMissionExecutor(
     store,
     mission_executor,
@@ -1138,7 +1161,44 @@ def v1_brain_chat(
     payload: BrainChatRequest,
     _: None = Depends(require_api_key),
 ) -> CoreBrainChatResponse:
-    if ALEX_INTELLIGENCE_SHADOW_ENABLED:
+    fast_path_result: IntelligenceFastPathResult | None = None
+    if ALEX_INTELLIGENCE_FAST_PATH_ENABLED:
+        try:
+            fast_path_result = _evaluate_intelligence_fast_path(payload)
+        except Exception:
+            pass
+        if ALEX_INTELLIGENCE_SHADOW_ENABLED:
+            try:
+                observe_precomputed_intelligence_shadow(
+                    enabled=True,
+                    decision=(
+                        fast_path_result.decision
+                        if isinstance(
+                            fast_path_result,
+                            IntelligenceFastPathResult,
+                        )
+                        else None
+                    ),
+                )
+            except Exception:
+                pass
+        try:
+            if (
+                isinstance(
+                    fast_path_result,
+                    IntelligenceFastPathResult,
+                )
+                and fast_path_result.handled
+            ):
+                return CoreBrainChatResponse(
+                    request_id=payload.request_id,
+                    assistant_text=fast_path_result.assistant_text or "",
+                    proposed_tool_calls=[],
+                    tool_results=[],
+                )
+        except Exception:
+            pass
+    elif ALEX_INTELLIGENCE_SHADOW_ENABLED:
         try:
             _observe_intelligence_shadow(payload)
         except Exception:

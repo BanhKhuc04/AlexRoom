@@ -119,8 +119,32 @@ def observe_intelligence_shadow(
     return result
 
 
+def observe_precomputed_intelligence_shadow(
+    *,
+    enabled: bool,
+    decision: IntelligenceRuntimeDecision | None,
+    observer: ShadowObserver | None = None,
+) -> IntelligenceShadowResult:
+    """Observe a decision already produced by the fast-path attempt."""
+
+    if not enabled:
+        return IntelligenceShadowResult(
+            enabled=False,
+            status=ShadowStatus.DISABLED,
+        )
+    try:
+        result = _result_from_decision(decision)
+    except Exception:
+        result = IntelligenceShadowResult(
+            enabled=True,
+            status=ShadowStatus.SHADOW_ERROR,
+        )
+    _emit_observation(result, observer)
+    return result
+
+
 def _result_from_decision(
-    decision: IntelligenceRuntimeDecision,
+    decision: IntelligenceRuntimeDecision | None,
 ) -> IntelligenceShadowResult:
     if not isinstance(decision, IntelligenceRuntimeDecision):
         raise TypeError("invalid_shadow_runtime_decision")
