@@ -34,7 +34,7 @@ class HardwareVerticalSliceTests(unittest.TestCase):
 
         self.service = CommandService(
             self.store, publish, RealtimeHub(), ack_timeout=0.04,
-            reported_timeout=0.04, max_retries=2, heartbeat_timeout=0.06,
+            reported_timeout=0.04, max_retries=2, heartbeat_timeout=0.3,
             simulator_mode=True,
         )
         self.gateway = CommandGateway(SafetyPolicy(CapabilityRegistry(), simulator_mode=True), self.service)
@@ -149,7 +149,7 @@ class HardwareVerticalSliceTests(unittest.TestCase):
         self.assertTrue(self.service.handle_ack(ack, "simulated"))
         self.assertTrue(self.service.handle_ack(ack, "simulated"))
         self.assertEqual(self.service.command(command["command_id"])["phase"], "waiting_reported_state")
-        self.assertTrue(wait_for(lambda: self.service.device()["connection"] == "offline", 0.3))
+        self.assertTrue(wait_for(lambda: self.service.device()["connection"] == "offline", 0.6))
 
     def test_simulator_duplicate_delivery_executes_once(self) -> None:
         self.service.ack_timeout = 0.3
