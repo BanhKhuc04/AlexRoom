@@ -60,23 +60,25 @@ class OllamaNativeProvider:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        payload: dict[str, object] = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": user_text},
+            ],
+            "think": False,
+            "stream": False,
+            "options": {
+                "temperature": 0,
+                "num_predict": OLLAMA_NUM_PREDICT,
+            },
+        }
+        if tools:
+            payload["tools"] = list(tools)
         upstream = self.transport.post_json(
             url=self.url,
             headers=headers,
-            payload={
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": user_text},
-                ],
-                "tools": list(tools),
-                "think": False,
-                "stream": False,
-                "options": {
-                    "temperature": 0,
-                    "num_predict": OLLAMA_NUM_PREDICT,
-                },
-            },
+            payload=payload,
             timeout_seconds=self.timeout_seconds,
         )
         return self._parse_response(upstream)

@@ -44,6 +44,12 @@ from alex_brain_missions import StoredSafeMissionExecutor
 from alex_brain_mutations import CommandGatewaySetTestLedExecutor
 from alex_brain_room_mode import AuthoritativeRoomModeExecutor, RoomMode
 from alex_brain_tools import BrainChatRequest
+from alex_brain_context_envelope import (
+    brain_relevant_context_enabled,
+    build_fail_closed_brain_request,
+    build_guarded_brain_request,
+    build_legacy_brain_request,
+)
 from alex_safety import CapabilityRegistry, CommandGateway, GatewayResult, SafetyDecision, SafetyPolicy
 from alex_ota import AlexOtaService
 from alex_version import ALEX_VERSION
@@ -60,6 +66,7 @@ from alex_intelligence_fast_path import (
     intelligence_fast_path_enabled,
 )
 from alex_intelligence_runtime import BRAIN_UNAVAILABLE_TEXT
+from alex_intent_planner import plan_intelligence
 from alex_brain_resilience_runtime import (
     BrainRequestLease,
     LiveBrainCircuitBreaker,
@@ -114,6 +121,9 @@ ALEX_INTELLIGENCE_FAST_PATH_ENABLED = intelligence_fast_path_enabled(
     os.environ
 )
 ALEX_BRAIN_CIRCUIT_BREAKER_ENABLED = brain_circuit_breaker_enabled(
+    os.environ
+)
+ALEX_BRAIN_RELEVANT_CONTEXT_ENABLED = brain_relevant_context_enabled(
     os.environ
 )
 
@@ -1033,6 +1043,40 @@ def _evaluate_intelligence_fast_path(
     )
 
 
+def _build_core_brain_request(
+    payload: BrainChatRequest,
+    fast_path_result: IntelligenceFastPathResult | None,
+) -> BrainChatRequest:
+    legacy_request = build_legacy_brain_request(payload)
+    if not ALEX_BRAIN_RELEVANT_CONTEXT_ENABLED:
+        return legacy_request
+
+    try:
+        plan = (
+            fast_path_result.decision.plan
+            if (
+                isinstance(
+                    fast_path_result,
+                    IntelligenceFastPathResult,
+                )
+                and fast_path_result.decision is not None
+            )
+            else plan_intelligence(payload.user_text)
+        )
+        snapshot = _build_intelligence_shadow_snapshot(
+            captured_at=utc_now_iso(),
+        )
+        return build_guarded_brain_request(
+            request=legacy_request,
+            plan=plan,
+            snapshot=snapshot,
+        )
+    except Exception:
+        # Enhanced mode may lose context, but it must never regain the full
+        # canonical tool catalog after a planner/context/narrowing failure.
+        return build_fail_closed_brain_request(legacy_request)
+
+
 core_brain_mission_executor = StoredSafeMissionExecutor(
     store,
     mission_executor,
@@ -1268,8 +1312,12 @@ def v1_brain_chat(
         except Exception:
             # Shadow observation must never alter the legacy request contract.
             pass
+    brain_request = _build_core_brain_request(
+        payload,
+        fast_path_result,
+    )
     try:
-        return _core_brain_chat_with_live_breaker(payload)
+        return _core_brain_chat_with_live_breaker(brain_request)
     except BrainClientError as error:
         status_codes = {
             "brain_disabled": 503,

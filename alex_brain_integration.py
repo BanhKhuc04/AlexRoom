@@ -78,6 +78,8 @@ CoreToolResultReason = Literal[
     "batch_rejected_in_c6a",
     "tool_not_enabled_in_c6b",
     "batch_rejected_in_c6b",
+    "tool_not_allowed_by_request",
+    "batch_rejected_by_request",
     "authoritative_read_failed",
     "safety_gateway_denied",
     "device_unavailable",
@@ -245,6 +247,44 @@ class CoreBrainIntegration:
                 "tool_count": len(tool_names),
             },
         )
+
+        if request.allowed_tools is not None:
+            narrowed_disallowed = [
+                call
+                for call in response.tool_calls
+                if call.name not in request.allowed_tools
+            ]
+            if narrowed_disallowed:
+                self._audit(
+                    "narrowed_policy_rejected",
+                    "warning",
+                    {
+                        "request_id": request.request_id,
+                        "tool_names": tool_names,
+                        "rejected_tool_names": [
+                            call.name
+                            for call in narrowed_disallowed
+                        ],
+                        "reason": "tool_not_allowed_by_request",
+                    },
+                )
+                return CoreBrainChatResponse(
+                    request_id=response.request_id,
+                    assistant_text=response.assistant_text,
+                    proposed_tool_calls=response.tool_calls,
+                    tool_results=[
+                        CoreBrainToolResult(
+                            name=call.name,
+                            status="rejected",
+                            reason=(
+                                "tool_not_allowed_by_request"
+                                if call.name not in request.allowed_tools
+                                else "batch_rejected_by_request"
+                            ),
+                        )
+                        for call in response.tool_calls
+                    ],
+                )
 
         disallowed = [
             call for call in response.tool_calls
