@@ -1466,3 +1466,41 @@ def v1_domain(domain: str) -> dict[str, Any]:
     if domain not in allowed:
         raise HTTPException(status_code=404, detail="Domain không tồn tại")
     return {"items": store.records(domain), "source": "local_software"}
+
+# --- Voice Integration ---
+try:
+    from alex_local_stt import FasterWhisperSTTProvider
+    voice_stt = FasterWhisperSTTProvider(model_size="tiny", device="cpu", compute_type="int8")
+except ImportError:
+    from alex_stt import DeterministicSTTProvider
+    voice_stt = DeterministicSTTProvider()
+
+try:
+    from alex_local_tts import LocalTTSProvider, NullPlaybackSink
+    voice_tts = LocalTTSProvider(executable_path="echo", model_path="") # minimal safe default
+    voice_playback = NullPlaybackSink()
+except ImportError:
+    from alex_tts import DeterministicTTSProvider
+    voice_tts = DeterministicTTSProvider()
+    from unittest.mock import Mock
+    voice_playback = Mock()
+
+from alex_voice_transport import BoundedAudioTransport
+bounded_audio_transport = BoundedAudioTransport(
+    stt_provider=voice_stt,
+    router_dispatch=intelligence_router.dispatch,
+    tts_provider=voice_tts,
+    playback_sink=voice_playback
+)
+
+from fastapi import WebSocket
+
+@app.websocket("/api/v1/voice/stream")
+async def v1_voice_stream(websocket: WebSocket, session_id: str, request_id: str):
+    """Authenticated endpoint for audio streaming."""
+    x_alex_key = websocket.query_params.get("key")
+    if x_alex_key is None or not hmac.compare_digest(x_alex_key, ALEX_API_KEY):
+        await websocket.close(code=1008)  # Policy Violation
+        return
+        
+    await bounded_audio_transport.handle_websocket(websocket, session_id, request_id)
