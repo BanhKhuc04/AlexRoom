@@ -391,7 +391,7 @@ def _publish_ota_command(topic: str, payload: str | dict, qos: int, retain: bool
         return simulator.publish(topic, payload, qos, retain)
     if not mqtt_connected.is_set():
         return False
-    
+
     if isinstance(payload, dict):
         payload_str = json.dumps(payload)
     else:
@@ -573,16 +573,16 @@ async def lifespan(app: FastAPI):
     add_event("system", "Alex Core khởi động", "success")
     mqtt_client.connect_async(MQTT_HOST, MQTT_PORT, keepalive=30)
     mqtt_client.loop_start()
-    
+
     def _on_hub_event(event: dict[str, Any]) -> None:
         if event.get("type") not in {"heartbeat", "node_online"}:
             return
         if event.get("source") == "simulated" and not ALEX_SIMULATOR:
             return
         ota_service.evaluate_ota_completion(event.get("data", {}))
-        
+
     realtime_hub.add_listener(_on_hub_event)
-    
+
     command_service.start()
     automation_scheduler.start()
     if ALEX_SIMULATOR:
@@ -805,19 +805,19 @@ def delete_domain_record(
 def get_firmware(node_id: str, version: str, token: str):
     if not ota_service.validate_download_token(node_id, version, token):
         raise HTTPException(status_code=403, detail="Invalid or expired download token")
-    
+
     firmware_path = ALEX_FIRMWARE_DIR / node_id / version / "firmware.bin"
     try:
         if not firmware_path.resolve().is_relative_to(ALEX_FIRMWARE_DIR.resolve()):
             raise HTTPException(status_code=403, detail="Invalid path")
     except AttributeError:
         pass
-        
+
     if not firmware_path.exists() or not firmware_path.is_file():
         raise HTTPException(status_code=404, detail="Firmware binary not found")
-        
+
     return FileResponse(
-        firmware_path, 
+        firmware_path,
         media_type="application/octet-stream",
         filename=f"{node_id}-{version}.bin"
     )
@@ -828,7 +828,7 @@ def get_ota_info(node_id: str, _: None = Depends(require_api_key)) -> dict[str, 
     v1 = command_service.device()
     if node_id != v1.get("node_id", DEVICE_ID):
         raise HTTPException(status_code=404, detail="Node not found")
-        
+
     installed_version = v1.get("firmware")
     return ota_service.get_ota_info(node_id, installed_version)
 
@@ -838,10 +838,10 @@ def request_ota(node_id: str, payload: OtaRequest, _: None = Depends(require_api
     v1 = command_service.device()
     if node_id != v1.get("node_id", DEVICE_ID):
         raise HTTPException(status_code=404, detail="Node not found")
-        
+
     if v1.get("connection") != "online":
         raise HTTPException(status_code=400, detail="Thiết bị đang offline")
-        
+
     installed_version = v1.get("firmware")
     try:
         return ota_service.request_ota(node_id, payload.version, installed_version)
@@ -1183,13 +1183,37 @@ def _router_shadow_observer(
     else:
         _observe_intelligence_shadow(payload)
 
+import sys
+
+def _get_telemetry_logger() -> logging.Logger:
+    import logging
+    logger = logging.getLogger("alex.intelligence.telemetry")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    has_stderr = False
+    for handler in logger.handlers:
+        if isinstance(handler, logging.StreamHandler) and getattr(handler, "stream", None) is sys.stderr:
+            has_stderr = True
+            break
+
+    if not has_stderr:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(handler)
+    return logger
+
+_TELEMETRY_LOGGER = _get_telemetry_logger()
+
 def _route_observation_sink(obs: "IntelligenceRouteObservation") -> None:
     # Emits structured runtime log best-effort. Does not call store.add_audit().
-    import logging
-    logging.getLogger("alex.intelligence.telemetry").info(
-        "Intelligence route observation",
-        extra={"route_observation": obs.to_compact_dict()}
+    import json
+    payload = json.dumps(
+        obs.to_compact_dict(),
+        ensure_ascii=False,
+        separators=(",", ":")
     )
+    _TELEMETRY_LOGGER.info(f"Intelligence route observation {payload}")
 
 
 intelligence_router = IntelligenceRouter(
