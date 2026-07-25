@@ -85,7 +85,7 @@ export class VoiceClient {
         }
       };
 
-      this.ws.onerror = (err) => {
+      this.ws.onerror = () => {
         clearTimeout(authTimer);
         this.callbacks.onError?.("websocket_error");
       };
@@ -101,6 +101,9 @@ export class VoiceClient {
 
   /**
    * Internal text message handler for typed protocol.
+   * @param {any} msg
+   * @param {any} authTimer
+   * @param {function(boolean): void} resolveConnect
    * @private
    */
   _handleTextMessage(msg, authTimer, resolveConnect) {

@@ -313,3 +313,12 @@ export interface SceneRecord extends SceneDefinition {
   id: string;
   updated_at?: string;
 }
+
+export interface BrainChatResponse {
+  request_id: string;
+  assistant_text: string;
+  tool_calls: Array<{ id: string; name: string; arguments: Record<string, any> }>;
+  tool_results?: any[];
+  route?: string;
+  latency_ms: number;
+}

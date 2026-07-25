@@ -39,6 +39,25 @@ from brain_service.service import (
 LOGGER = logging.getLogger("alex.brain.service")
 AUTH_HEADER = "X-ALEX-Brain-Key"
 
+_STT_PROVIDER = None
+_TTS_PROVIDER = None
+
+
+def get_stt_provider():
+    global _STT_PROVIDER
+    if _STT_PROVIDER is None:
+        from alex_local_stt import FasterWhisperSTTProvider
+        _STT_PROVIDER = FasterWhisperSTTProvider()
+    return _STT_PROVIDER
+
+
+def get_tts_provider():
+    global _TTS_PROVIDER
+    if _TTS_PROVIDER is None:
+        from alex_local_tts import LocalTTSProvider
+        _TTS_PROVIDER = LocalTTSProvider()
+    return _TTS_PROVIDER
+
 
 class BrainHttpError(Exception):
     def __init__(
@@ -100,94 +119,121 @@ def _log_outcome(
 
 def create_app(
     config: BrainServiceConfig | None = None,
-    service: BrainInferenceService | None = None,
+    inference_service: BrainInferenceService | None = None,
 ) -> FastAPI:
-    resolved_config = config or BrainServiceConfig.from_environment()
-    inference_service = service or BrainInferenceService(build_provider(resolved_config))
+    loaded_config = config or BrainServiceConfig.from_environment()
+    service = inference_service or BrainInferenceService(
+        provider=build_provider(loaded_config)
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        readiness = inference_service.warmup(
-            timeout_seconds=resolved_config.warmup_timeout_seconds
+        readiness = service.warmup(
+            timeout_seconds=loaded_config.warmup_timeout_seconds
         )
         _log_outcome(
             "/startup",
             readiness.warmup,
-            provider=inference_service.provider_name,
+            provider=service.provider_name,
         )
         yield
 
     brain_app = FastAPI(
-        title="ALEX Brain",
-        version="v1",
+        title="ALEX Brain Service",
+        version="1.0.0",
         lifespan=lifespan,
     )
 
+    def require_brain_api_key(
+        x_alex_brain_key: Annotated[str | None, Header(alias=AUTH_HEADER)] = None,
+    ) -> None:
+        if not loaded_config.api_key_configured:
+            raise BrainHttpError(
+                503,
+                "authentication_not_configured",
+                "ALEX Brain API key is not configured.",
+            )
+
+        if not x_alex_brain_key:
+            raise BrainHttpError(
+                401,
+                "authentication_required",
+                "Missing ALEX Brain API key header.",
+            )
+
+        if not secure_credentials_match(
+            x_alex_brain_key,
+            loaded_config.api_key,
+        ):
+            raise BrainHttpError(
+                401,
+                "invalid_credential",
+                "Invalid ALEX Brain API key.",
+            )
+
     @brain_app.exception_handler(BrainHttpError)
-    async def handle_brain_http_error(_: Request, error: BrainHttpError) -> JSONResponse:
+    def handle_brain_http_error(
+        _: Request,
+        error: BrainHttpError,
+    ) -> JSONResponse:
         return _error_response(error)
 
     @brain_app.exception_handler(RequestValidationError)
-    async def handle_validation_error(request: Request, _: RequestValidationError) -> JSONResponse:
-        _log_outcome(request.url.path, "invalid_request")
+    def handle_validation_error(
+        _: Request,
+        error: RequestValidationError,
+    ) -> JSONResponse:
+        request_id = None
         return _error_response(
             BrainHttpError(
                 422,
                 "invalid_request",
                 "Request body does not match BrainChatRequest.",
+                request_id,
             )
         )
-
-    @brain_app.exception_handler(Exception)
-    async def handle_unexpected_error(request: Request, _: Exception) -> JSONResponse:
-        _log_outcome(request.url.path, "internal_error")
-        return _error_response(
-            BrainHttpError(
-                500,
-                "internal_error",
-                "The Brain service could not process the request.",
-            )
-        )
-
-    def require_brain_api_key(
-        credential: Annotated[str | None, Header(alias=AUTH_HEADER)] = None,
-    ) -> None:
-        if credential is None:
-            _log_outcome("/v1/chat", "authentication_required")
-            raise BrainHttpError(
-                401,
-                "authentication_required",
-                f"Provide the {AUTH_HEADER} header.",
-            )
-        if not resolved_config.api_key:
-            _log_outcome("/v1/chat", "authentication_not_configured")
-            raise BrainHttpError(
-                503,
-                "authentication_not_configured",
-                "Brain service authentication is not configured.",
-            )
-        if not secure_credentials_match(credential, resolved_config.api_key):
-            _log_outcome("/v1/chat", "invalid_credential")
-            raise BrainHttpError(
-                401,
-                "invalid_credential",
-                "Brain service credential was rejected.",
-            )
 
     @brain_app.get("/health", response_model=BrainHealthResponse)
     def health() -> BrainHealthResponse:
-        response = inference_service.health()
-        _log_outcome("/health", "ok", provider=inference_service.provider_name)
+        response = service.health()
+        _log_outcome("/health", "ok", provider=service.provider_name)
         return response
 
     @brain_app.get("/ready", response_model=BrainReadinessResponse)
     def ready() -> BrainReadinessResponse:
-        response = inference_service.readiness()
+        response = service.readiness()
         _log_outcome(
             "/ready",
             response.status,
-            provider=inference_service.provider_name,
+            provider=service.provider_name,
         )
+        return response
+
+    @brain_app.get(
+        "/v1/health",
+        response_model=BrainHealthResponse,
+        responses={503: {"model": BrainErrorResponse}},
+    )
+    def v1_health() -> BrainHealthResponse:
+        response = service.health()
+        _log_outcome("/v1/health", "ok", provider=service.provider_name)
+        return response
+
+    @brain_app.get(
+        "/v1/readiness",
+        response_model=BrainReadinessResponse,
+        responses={503: {"model": BrainErrorResponse}},
+    )
+    def v1_readiness() -> BrainReadinessResponse:
+        response = service.readiness()
+        if response.status != "ready":
+            _log_outcome("/v1/readiness", "not_ready", provider=service.provider_name)
+            raise BrainHttpError(
+                503,
+                "not_ready",
+                "ALEX Brain service is not ready.",
+            )
+        _log_outcome("/v1/readiness", "ok", provider=service.provider_name)
         return response
 
     @brain_app.post(
@@ -207,13 +253,13 @@ def create_app(
     ) -> BrainChatResponse:
         started = time.monotonic()
         try:
-            response = inference_service.chat(payload)
+            response = service.chat(payload)
         except ProviderNotConfiguredError as error:
             _log_outcome(
                 "/v1/chat",
                 "provider_not_configured",
                 payload.request_id,
-                provider=inference_service.provider_name,
+                provider=service.provider_name,
             )
             raise BrainHttpError(
                 503,
@@ -226,7 +272,7 @@ def create_app(
                 "/v1/chat",
                 "provider_timeout",
                 payload.request_id,
-                provider=inference_service.provider_name,
+                provider=service.provider_name,
             )
             raise BrainHttpError(
                 504,
@@ -239,7 +285,7 @@ def create_app(
                 "/v1/chat",
                 "provider_unavailable",
                 payload.request_id,
-                provider=inference_service.provider_name,
+                provider=service.provider_name,
             )
             raise BrainHttpError(
                 503,
@@ -252,7 +298,7 @@ def create_app(
                 "/v1/chat",
                 "invalid_provider_response",
                 payload.request_id,
-                provider=inference_service.provider_name,
+                provider=service.provider_name,
             )
             raise BrainHttpError(
                 502,
@@ -265,7 +311,7 @@ def create_app(
             "/v1/chat",
             "ok",
             payload.request_id,
-            provider=inference_service.provider_name,
+            provider=service.provider_name,
             tool_count=len(response.tool_calls),
             latency_ms=latency_ms,
         )
@@ -287,9 +333,9 @@ def create_app(
         import base64
         try:
             audio_bytes = base64.b64decode(payload.audio_base64)
-            from alex_local_stt import FasterWhisperSTTProvider
-            stt_provider = FasterWhisperSTTProvider()
+            stt_provider = get_stt_provider()
             result = await stt_provider.transcribe(payload.session_id, payload.request_id, audio_bytes)
+            _log_outcome("/v1/stt", "ok", payload.request_id, provider="faster_whisper")
             return BrainSTTResponse(
                 session_id=payload.session_id,
                 request_id=payload.request_id,
@@ -298,11 +344,20 @@ def create_app(
                 provider="brain_stt",
             )
         except Exception as error:
-            _log_outcome("/v1/stt", "stt_unavailable", payload.request_id)
+            error_cls = error.__class__.__name__
+            safe_detail = str(error)
+            LOGGER.error(
+                "stt_failed request_id=%s session_id=%s provider=faster_whisper error_cls=%s error=%s",
+                payload.request_id,
+                payload.session_id,
+                error_cls,
+                safe_detail,
+            )
+            _log_outcome("/v1/stt", "stt_unavailable", payload.request_id, provider="faster_whisper")
             raise BrainHttpError(
                 503,
                 "stt_unavailable",
-                f"STT synthesis unavailable: {error}",
+                f"STT transcription unavailable: {safe_detail[:120]}",
                 payload.request_id,
             ) from error
 
@@ -321,10 +376,10 @@ def create_app(
     ) -> BrainTTSResponse:
         import base64
         try:
-            from alex_local_tts import LocalTTSProvider
-            tts_provider = LocalTTSProvider()
+            tts_provider = get_tts_provider()
             result = await tts_provider.synthesize(payload.session_id, payload.request_id, payload.text)
             audio_b64 = base64.b64encode(result.audio_data).decode("utf-8")
+            _log_outcome("/v1/tts", "ok", payload.request_id, provider="local_tts")
             return BrainTTSResponse(
                 session_id=payload.session_id,
                 request_id=payload.request_id,
@@ -332,11 +387,20 @@ def create_app(
                 provider="brain_tts",
             )
         except Exception as error:
-            _log_outcome("/v1/tts", "tts_unavailable", payload.request_id)
+            error_cls = error.__class__.__name__
+            safe_detail = str(error)
+            LOGGER.error(
+                "tts_failed request_id=%s session_id=%s provider=local_tts error_cls=%s error=%s",
+                payload.request_id,
+                payload.session_id,
+                error_cls,
+                safe_detail,
+            )
+            _log_outcome("/v1/tts", "tts_unavailable", payload.request_id, provider="local_tts")
             raise BrainHttpError(
                 503,
                 "tts_unavailable",
-                f"TTS synthesis unavailable: {error}",
+                f"TTS synthesis unavailable: {safe_detail[:120]}",
                 payload.request_id,
             ) from error
 

@@ -84,12 +84,14 @@ export class AudioRecorder {
 
   /**
    * Encodes a single Float32 chunk to Int16 PCM.
+   * @param {Float32Array} samples
    * @private
    */
   _encodePCM16Chunk(samples) {
     const buffer = new Int16Array(samples.length);
     for (let i = 0; i < samples.length; i++) {
-      const s = Math.max(-1, Math.min(1, samples[i]));
+      const val = samples[i] ?? 0;
+      const s = Math.max(-1, Math.min(1, val));
       buffer[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
     }
     return buffer;
@@ -131,7 +133,8 @@ export class AudioRecorder {
     let offset = 44;
     for (const chunk of this.pcmChunks) {
       for (let i = 0; i < chunk.length; i++) {
-        const s = Math.max(-1, Math.min(1, chunk[i]));
+        const val = chunk[i] ?? 0;
+        const s = Math.max(-1, Math.min(1, val));
         view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
         offset += 2;
       }
@@ -142,6 +145,9 @@ export class AudioRecorder {
 
   /**
    * Writes string to DataView.
+   * @param {DataView} view
+   * @param {number} offset
+   * @param {string} string
    * @private
    */
   _writeString(view, offset, string) {

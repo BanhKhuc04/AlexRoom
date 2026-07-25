@@ -119,7 +119,7 @@ test("app.js module imports resolve and execute init path without ReferenceError
     HTMLInputElement: MockHTMLInputElement,
     HTMLTextAreaElement: MockHTMLTextAreaElement,
     HTMLSelectElement: MockHTMLSelectElement,
-    requestAnimationFrame: (cb) => 1,
+    requestAnimationFrame: () => 1,
     cancelAnimationFrame: () => {},
     AudioContext: class {
       createGain() { return { connect() {}, gain: { value: 1 } }; }

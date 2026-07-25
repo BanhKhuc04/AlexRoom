@@ -18,6 +18,7 @@ import { elements } from "./elements-phase2.js";
  *   executeRelay: (id: number, action: "ON" | "OFF") => Promise<void>,
  *   executeTestLed: (value: boolean) => Promise<void>,
  *   executeMode: (mode: RoomMode) => Promise<void>,
+ *   executeBrainChat?: (userText: string) => Promise<any>,
  *   scheduleIdle: () => void,
  *   reducedMotion: () => boolean,
  *   view: import("./presence-view.js").createPresenceView extends (...args: never[]) => infer R ? R : never

@@ -58,6 +58,9 @@ import base64
 import asyncio
 from alex_brain_client import CoreBrainClient, BrainClientError
 
+from alex_audio import AudioValidationError, raw_pcm16le_to_wav
+
+
 class BrainSTTProvider:
     """Remote STT provider delegating speech recognition to ALEX Brain PC."""
 
@@ -66,9 +69,14 @@ class BrainSTTProvider:
 
     async def transcribe(self, session_id: str, request_id: str, audio_data: bytes, **kwargs: Any) -> STTResult:
         if not audio_data:
-            raise STTError(STTErrorCode.INTERNAL_FAILURE, "Empty audio data provided")
+            raise STTError(STTErrorCode.INTERNAL_FAILURE, "Empty audio payload provided")
 
-        audio_b64 = base64.b64encode(audio_data).decode("utf-8")
+        try:
+            wav_bytes = raw_pcm16le_to_wav(audio_data, sample_rate=16000, channels=1)
+        except AudioValidationError as err:
+            raise STTError(STTErrorCode.INTERNAL_FAILURE, f"Invalid audio input: {err}") from err
+
+        audio_b64 = base64.b64encode(wav_bytes).decode("utf-8")
         try:
             loop = asyncio.get_running_loop()
             resp = await loop.run_in_executor(

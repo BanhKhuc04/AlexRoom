@@ -87,6 +87,14 @@ def test_bounded_audio_transport_cancel():
     asyncio.run(run())
 
 
+def test_websocket_dependency_availability():
+    """Verify that a supported WebSocket implementation is importable and available for Uvicorn."""
+    import importlib.util
+    has_websockets = importlib.util.find_spec("websockets") is not None
+    has_wsproto = importlib.util.find_spec("wsproto") is not None
+    assert has_websockets or has_wsproto, "Neither 'websockets' nor 'wsproto' is available for Uvicorn WebSocket support"
+
+
 def test_bounded_audio_transport_disconnect():
     async def run():
         stt_provider = AsyncMock()

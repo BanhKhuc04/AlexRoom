@@ -32,10 +32,18 @@ def test_faster_whisper_success_mocked():
         # Make sure the provider took the mocked model
         provider.model = mock_model
         
-        # Fake WAV data
-        fake_wav = b"RIFF$" + b"\x00"*40
+        # Valid 16kHz mono 16-bit PCM WAV data
+        import io
+        import wave
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(b"\x00\x00" * 100)
+        valid_wav = buf.getvalue()
         
-        result = asyncio.run(provider.transcribe("s1", "r1", fake_wav))
+        result = asyncio.run(provider.transcribe("s1", "r1", valid_wav))
         
         assert result.session_id == "s1"
         assert result.request_id == "r1"

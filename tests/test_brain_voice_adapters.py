@@ -18,7 +18,7 @@ def test_brain_stt_provider_success():
         }
 
         stt = BrainSTTProvider(mock_client)
-        result = await stt.transcribe("s1", "r1", b"fake_pcm_data")
+        result = await stt.transcribe("s1", "r1", b"fake_pcm_data_16")
 
         assert result.session_id == "s1"
         assert result.request_id == "r1"
@@ -35,7 +35,7 @@ def test_brain_stt_provider_unavailable():
 
         stt = BrainSTTProvider(mock_client)
         with pytest.raises(STTError) as exc_info:
-            await stt.transcribe("s1", "r1", b"fake_pcm_data")
+            await stt.transcribe("s1", "r1", b"fake_pcm_data_16")
         
         assert exc_info.value.code == STTErrorCode.STT_UNAVAILABLE
 

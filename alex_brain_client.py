@@ -223,7 +223,10 @@ class CoreBrainClient:
             "session_id": session_id,
             "request_id": request_id,
             "audio_base64": audio_base64,
-            "language": language
+            "audio_format": "wav_pcm16",
+            "sample_rate": 16000,
+            "channels": 1,
+            "language": language,
         }).encode("utf-8")
 
         outbound = Request(

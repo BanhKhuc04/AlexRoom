@@ -29,6 +29,10 @@ class BrainServiceConfig:
     provider_timeout_seconds: float = DEFAULT_PROVIDER_TIMEOUT_SECONDS
     warmup_timeout_seconds: float = DEFAULT_WARMUP_TIMEOUT_SECONDS
 
+    @property
+    def api_key_configured(self) -> bool:
+        return bool(self.api_key and self.api_key.strip())
+
     @classmethod
     def from_environment(cls) -> "BrainServiceConfig":
         timeout = cls._parse_bounded_timeout(

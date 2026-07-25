@@ -7,6 +7,9 @@ import { elements } from "./elements-phase2.js";
 /** @typedef {import("../core/quality.js").MotionProfile} MotionProfile */
 /** @typedef {import("../core/domain").SystemSnapshot} SystemSnapshot */
 
+/**
+ * @param {{ onMicStart?: (stream: MediaStream) => Promise<void>, onMicStop?: () => Promise<void> }} [options]
+ */
 export function createPresenceView(options = {}) {
   const waveform = createAudioWaveform();
   const renderer = createCoreRenderer(elements.coreCanvas, waveform);
@@ -106,8 +109,9 @@ export function createPresenceView(options = {}) {
       options.onMicStop?.();
     } else {
       const ok = await waveform.start();
-      if (ok && waveform.getStream()) {
-        options.onMicStart?.(waveform.getStream());
+      const stream = waveform.getStream();
+      if (ok && stream) {
+        options.onMicStart?.(stream);
       }
     }
     updateMicrophoneUi();

@@ -421,6 +421,9 @@ class BrainSTTRequest(StrictContractModel):
     session_id: str = Field(min_length=1, max_length=MAX_REQUEST_ID_LENGTH, pattern=BOUNDED_ID_PATTERN)
     request_id: str = Field(min_length=1, max_length=MAX_REQUEST_ID_LENGTH, pattern=BOUNDED_ID_PATTERN)
     audio_base64: str = Field(min_length=1)
+    audio_format: str = Field(default="wav_pcm16", max_length=32)
+    sample_rate: int = Field(default=16000, ge=8000, le=48000)
+    channels: int = Field(default=1, ge=1, le=2)
     language: str = Field(default="vi", max_length=10)
 
 

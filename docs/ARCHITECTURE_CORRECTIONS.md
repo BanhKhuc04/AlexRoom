@@ -19,6 +19,9 @@ This register documents architectural debt and corrections identified during Pha
 ---
 
 ## 2. DEFER_NEXT_PHASE (Scheduled for Phase 1.1 / Phase 2)
+- **ScriptProcessorNode Deprecation**: `AudioRecorder` currently uses `ScriptProcessorNode` for 16kHz PCM downsampling. Scheduled for `AudioWorklet` migration in Phase 1.1.
+- **`aria-hidden` Retained Focus Warning**: Browser console accessibility warning when modal dialogs set `aria-hidden` while an inner element retains focus.
+- **Repeated OTA 401 Noise**: Background OTA status polling generating 401 console logs when `X-Alex-Key` is unverified.
 - **Full Deletion of Legacy UI Helper Methods**: Non-reachable legacy intent methods retained safely for backward workspace compatibility until UI rewrite.
 - **Global Event Bus Redesign**: EventSource SSE retained alongside WebSocket for telemetry streaming until a unified multi-channel socket is introduced.
 - **Multi-Turn Conversation Persistence**: Long-term conversational context history storage across browser reloads.

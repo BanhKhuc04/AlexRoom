@@ -130,6 +130,7 @@ const audioRecorder = new AudioRecorder({
 });
 
 const presenceView = createPresenceView({
+  /** @param {MediaStream} stream */
   onMicStart: async (stream) => {
     if (!api.apiKey) {
       showToast("Cần xác minh API key trước khi dùng kênh giọng nói.");
