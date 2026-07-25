@@ -118,3 +118,33 @@ def test_real_provider_smoke_test():
     assert result.session_id == "sess-smoke-1"
     assert result.request_id == "req-smoke-1"
     assert isinstance(result.transcript, str)
+
+
+from alex_audio import validate_wav_pcm
+
+
+def test_validate_wav_pcm_22050_hz_piper():
+    """Verify validate_wav_pcm accepts valid 22050 Hz WAV from Piper TTS."""
+    piper_wav = create_pcm16_le_wav_fixture(sample_rate=22050, duration_sec=0.5)
+    meta = validate_wav_pcm(piper_wav)
+    assert meta["sample_rate"] == 22050
+    assert meta["channels"] == 1
+    assert meta["sample_width"] == 2
+    assert meta["duration_seconds"] == pytest.approx(0.5, abs=0.05)
+
+
+def test_validate_wav_pcm_empty_and_oversized():
+    """Verify validate_wav_pcm rejects empty data and audio exceeding 5MB max bytes."""
+    with pytest.raises(AudioValidationError, match="Empty audio payload"):
+        validate_wav_pcm(b"")
+
+    oversized_header = b"RIFF" + b"\x00" * 4 + b"WAVE" + b"\x00" * (MAX_AUDIO_BYTES + 10)
+    with pytest.raises(AudioValidationError, match="exceeds limit"):
+        validate_wav_pcm(oversized_header, max_bytes=MAX_AUDIO_BYTES)
+
+
+def test_validate_wav_pcm_non_wav_rejection():
+    """Verify validate_wav_pcm rejects non-RIFF/WAVE containers."""
+    with pytest.raises(AudioValidationError, match="expected valid RIFF/WAVE"):
+        validate_wav_pcm(b"NOT_A_WAVE_CONTAINER_DATA_HERE")
+

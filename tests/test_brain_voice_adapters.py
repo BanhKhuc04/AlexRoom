@@ -43,12 +43,18 @@ def test_brain_stt_provider_unavailable():
 
 def test_brain_tts_provider_success():
     async def run():
+        from tests.test_audio_contract import create_pcm16_le_wav_fixture
+        import base64
+        valid_wav = create_pcm16_le_wav_fixture(sample_rate=22050)
+        wav_b64 = base64.b64encode(valid_wav).decode("utf-8")
+
         mock_client = Mock(spec=CoreBrainClient)
         mock_client.synthesize.return_value = {
             "session_id": "s1",
             "request_id": "r1",
-            "audio_base64": "dHRzX2F1ZGlv", # base64 for "tts_audio"
-            "provider": "brain_tts"
+            "audio_base64": wav_b64,
+            "provider": "brain_tts",
+            "sample_rate": 22050,
         }
 
         tts = BrainTTSProvider(mock_client)
@@ -56,11 +62,13 @@ def test_brain_tts_provider_success():
 
         assert result.session_id == "s1"
         assert result.request_id == "r1"
-        assert result.audio_data == b"tts_audio"
+        assert result.audio_data == valid_wav
         assert result.provider == "brain_tts"
+        assert result.metadata["sample_rate"] == 22050
         mock_client.synthesize.assert_called_once()
 
     asyncio.run(run())
+
 
 def test_brain_tts_provider_unavailable():
     async def run():

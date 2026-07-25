@@ -385,7 +385,12 @@ def create_app(
                 request_id=payload.request_id,
                 audio_base64=audio_b64,
                 provider="brain_tts",
+                audio_format="wav",
+                sample_rate=result.metadata.get("sample_rate", 22050),
+                channels=result.metadata.get("channels", 1),
+                sample_width=result.metadata.get("sample_width", 2),
             )
+
         except Exception as error:
             error_cls = error.__class__.__name__
             safe_detail = str(error)

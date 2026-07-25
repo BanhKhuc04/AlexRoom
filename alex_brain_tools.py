@@ -446,6 +446,11 @@ class BrainTTSResponse(StrictContractModel):
     request_id: str = Field(min_length=1, max_length=MAX_REQUEST_ID_LENGTH, pattern=BOUNDED_ID_PATTERN)
     audio_base64: str = Field(default="")
     provider: str = Field(default="brain_tts", max_length=64)
+    audio_format: str = Field(default="wav", max_length=32)
+    sample_rate: int = Field(default=22050, ge=8000, le=48000)
+    channels: int = Field(default=1, ge=1, le=2)
+    sample_width: int = Field(default=2, ge=1, le=4)
+
 
 
 class BrainRecordStore(Protocol):

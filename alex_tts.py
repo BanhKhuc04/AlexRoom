@@ -58,6 +58,7 @@ class DeterministicTTSProvider:
 import base64
 import asyncio
 from alex_brain_client import CoreBrainClient, BrainClientError
+from alex_audio import validate_wav_pcm, AudioValidationError
 
 class BrainTTSProvider:
     """Remote TTS provider delegating speech synthesis to ALEX Brain PC."""
@@ -80,16 +81,30 @@ class BrainTTSProvider:
             )
             audio_b64 = resp.get("audio_base64", "")
             audio_bytes = base64.b64decode(audio_b64) if audio_b64 else b""
+
+            if not audio_bytes:
+                raise TTSError(TTSErrorCode.INTERNAL_FAILURE, "Empty audio returned from Brain TTS")
+
+            wav_meta = validate_wav_pcm(audio_bytes)
+            metadata = dict(resp.get("metadata", {}))
+            metadata.update(wav_meta)
+            metadata.setdefault("audio_format", resp.get("audio_format", "wav"))
+
             return TTSResult(
                 session_id=session_id,
                 request_id=request_id,
                 audio_data=audio_bytes,
                 provider=resp.get("provider", "brain_tts"),
-                metadata=resp.get("metadata", {})
+                metadata=metadata
             )
+        except AudioValidationError as e:
+            raise TTSError(TTSErrorCode.INTERNAL_FAILURE, f"Invalid Brain TTS audio container: {e}") from e
+        except TTSError:
+            raise
         except BrainClientError as e:
             code = TTSErrorCode.SYNTHESIS_TIMEOUT if e.code == "brain_timeout" else TTSErrorCode.TTS_UNAVAILABLE
             raise TTSError(code, f"Brain TTS error: {e.code}") from e
         except Exception as e:
             raise TTSError(TTSErrorCode.INTERNAL_FAILURE, str(e)) from e
+
 

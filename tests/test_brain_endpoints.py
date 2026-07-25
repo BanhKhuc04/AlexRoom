@@ -54,8 +54,14 @@ def test_brain_tts_endpoint_auth_required(client):
 
 def test_brain_tts_endpoint_success(client):
     """Verify /v1/tts returns audio only and cannot mutate Core state."""
+    from tests.test_audio_contract import create_pcm16_le_wav_fixture
+    valid_wav = create_pcm16_le_wav_fixture(sample_rate=22050)
     with patch("alex_local_tts.LocalTTSProvider.synthesize") as mock_synth:
-        mock_synth.return_value = Mock(audio_data=b"audio_pcm_stream", provider="piper")
+        mock_synth.return_value = Mock(
+            audio_data=valid_wav,
+            provider="piper",
+            metadata={"sample_rate": 22050, "channels": 1, "sample_width": 2, "duration_seconds": 0.5}
+        )
 
         res = client.post(
             "/v1/tts",
@@ -72,6 +78,8 @@ def test_brain_tts_endpoint_success(client):
         assert data["session_id"] == "s-tts-1"
         assert data["request_id"] == "r-tts-1"
         audio_bytes = base64.b64decode(data["audio_base64"])
-        assert audio_bytes == b"audio_pcm_stream"
+        assert audio_bytes == valid_wav
         assert data["provider"] == "brain_tts"
+        assert data["sample_rate"] == 22050
         assert "tool_calls" not in data
+

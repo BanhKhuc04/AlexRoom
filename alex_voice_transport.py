@@ -240,8 +240,11 @@ class BoundedAudioTransport:
                                 "type": "speaking",
                                 "session_id": session_id,
                                 "request_id": request_id,
-                                "audio_base64": audio_b64
+                                "audio_base64": audio_b64,
+                                "audio_format": tts_result.metadata.get("audio_format", "wav"),
+                                "sample_rate": tts_result.metadata.get("sample_rate", 22050),
                             })
+
                         if self.playback_sink and hasattr(self.playback_sink, "play"):
                             try:
                                 await self.playback_sink.play(tts_result.audio_data)

@@ -1,0 +1,12 @@
+# ALEX Brain PC (x86_64 Linux / Ubuntu) — production dependency profile.
+# STT / TTS / LLM compute service requirements only.
+#
+# Do NOT include paho-mqtt or any MQTT package in this file.
+# ALEX Brain is compute-only and must never interact with MQTT directly.
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.34,<1.0
+websockets>=16.0,<17.0
+pydantic>=2.10,<3.0
+faster-whisper>=1.0.0,<2.0
+piper-tts==1.5.0

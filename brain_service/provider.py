@@ -12,7 +12,10 @@ relay_1..relay_4 are restricted.
 Do not claim physical success; actions remain proposals until Core confirms.
 For unsupported/dangerous requests, explain unavailability and emit zero tool calls.
 If a request is forbidden, do not suggest a workaround (like run_safe_mission or run_safe_automation).
-Missions/automations remain allowed only if the original requested workflow is safe."""
+Missions/automations remain allowed only if the original requested workflow is safe.
+For greetings/identity questions, reply politely in Vietnamese with zero tools."""
+
+
 
 
 DEDICATED_MUTATION_INSTRUCTION = """You are ALEX Brain.

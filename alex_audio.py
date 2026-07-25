@@ -73,3 +73,54 @@ def raw_pcm16le_to_wav(
         wav.writeframes(audio_data)
 
     return buffer.getvalue()
+
+
+def validate_wav_pcm(
+    audio_data: bytes,
+    min_sample_rate: int = 8000,
+    max_sample_rate: int = 48000,
+    max_bytes: int = MAX_AUDIO_BYTES,
+) -> dict[str, Any]:
+    """
+    Validates a RIFF/WAVE container containing PCM audio.
+    
+    Returns metadata dict with keys: sample_rate, channels, sample_width, frame_count, duration_seconds.
+    Raises AudioValidationError if audio_data is empty, oversized, not RIFF/WAVE, or corrupted.
+    """
+    from typing import Any
+
+    if not audio_data:
+        raise AudioValidationError("Empty audio payload provided")
+
+    if len(audio_data) > max_bytes:
+        raise AudioValidationError(f"Audio payload ({len(audio_data)} bytes) exceeds limit of {max_bytes} bytes")
+
+    if audio_data[:4] != b"RIFF" or audio_data[8:12] != b"WAVE":
+        raise AudioValidationError("Invalid audio: expected valid RIFF/WAVE container header")
+
+    try:
+        with wave.open(io.BytesIO(audio_data), "rb") as wav:
+            w_channels = wav.getnchannels()
+            w_sampwidth = wav.getsampwidth()
+            w_rate = wav.getframerate()
+            w_frames = wav.getnframes()
+
+            if w_channels < 1 or w_channels > 2:
+                raise AudioValidationError(f"Unsupported channel count: {w_channels}")
+            if w_sampwidth not in (1, 2, 3, 4):
+                raise AudioValidationError(f"Unsupported sample width: {w_sampwidth} bytes")
+            if w_rate < min_sample_rate or w_rate > max_sample_rate:
+                raise AudioValidationError(f"Sample rate {w_rate} Hz out of bounds [{min_sample_rate}, {max_sample_rate}]")
+
+            duration = w_frames / float(w_rate) if w_rate > 0 else 0.0
+
+            return {
+                "sample_rate": w_rate,
+                "channels": w_channels,
+                "sample_width": w_sampwidth,
+                "frame_count": w_frames,
+                "duration_seconds": duration,
+            }
+    except (wave.Error, EOFError, struct.error, ValueError) as err:
+        raise AudioValidationError(f"Corrupted WAV audio header: {err}") from err
+

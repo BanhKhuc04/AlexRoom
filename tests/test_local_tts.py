@@ -1,48 +1,122 @@
-import pytest
 import asyncio
-from unittest.mock import patch
+import io
+import math
+import struct
+import wave
+from unittest.mock import MagicMock, patch
+import pytest
 
+from alex_local_tts import (
+    LocalTTSProvider,
+    NullPlaybackSink,
+    normalize_tts_pronunciation,
+)
 from alex_tts import TTSError, TTSErrorCode
-from alex_local_tts import LocalTTSProvider, NullPlaybackSink
 
-def test_local_tts_success():
-    provider = LocalTTSProvider()
+
+def create_test_wav_bytes(sample_rate: int = 22050, duration_sec: float = 0.2) -> bytes:
+    """Generate a valid RIFF/WAVE PCM16 mono byte stream for testing."""
+    num_samples = int(sample_rate * duration_sec)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wav_out:
+        wav_out.setnchannels(1)
+        wav_out.setsampwidth(2)
+        wav_out.setframerate(sample_rate)
+        frames = bytearray()
+        for i in range(num_samples):
+            sample = int(math.sin(2 * math.pi * 440 * (i / sample_rate)) * 32767)
+            frames.extend(struct.pack("<h", sample))
+        wav_out.writeframes(bytes(frames))
+    return buf.getvalue()
+
+
+def test_pronunciation_normalization_boundary():
+    """Verify word-boundary aware pronunciation normalization."""
+    assert normalize_tts_pronunciation("ALEX", "A-lếch") == "A-lếch"
+    assert normalize_tts_pronunciation("Alex", "A-lếch") == "A-lếch"
+    assert normalize_tts_pronunciation("alex", "A-lếch") == "A-lếch"
+    assert normalize_tts_pronunciation("Xin chào ALEX, tôi là ai?", "A-lếch") == "Xin chào A-lếch, tôi là ai?"
     
-    # Run mock synthesis
-    result = asyncio.run(provider.synthesize("s1", "r1", "Hello world"))
-    
+    # Substring in unrelated words MUST NOT be modified
+    assert normalize_tts_pronunciation("alexander đại đế", "A-lếch") == "alexander đại đế"
+    assert normalize_tts_pronunciation("alexa bật đèn", "A-lếch") == "alexa bật đèn"
+
+
+def test_local_tts_python_backend_success(tmp_path):
+    """Verify python backend synthesizes valid WAV using cached PiperVoice."""
+    model_path = str(tmp_path / "test.onnx")
+    config_path = str(tmp_path / "test.onnx.json")
+    with open(model_path, "w") as f:
+        f.write("mock_model")
+    with open(config_path, "w") as f:
+        f.write("{}")
+
+    valid_wav = create_test_wav_bytes(sample_rate=22050)
+
+    mock_voice = MagicMock()
+    def mock_synth(text, wav_out):
+        wav_out.writeframes(valid_wav[44:]) # write raw frames into wave writer
+    mock_voice.synthesize = mock_synth
+
+    provider = LocalTTSProvider(model_path=model_path, config_path=config_path, backend="python")
+    provider._piper_voice = mock_voice
+    provider._voice_loaded = True
+
+    result = asyncio.run(provider.synthesize("s1", "r1", "Xin chào ALEX"))
     assert result.session_id == "s1"
     assert result.request_id == "r1"
-    assert b"Hello world" in result.audio_data
     assert result.provider == "local_tts"
+    assert result.metadata["sample_rate"] == 22050
+    assert result.metadata["channels"] == 1
 
-def test_local_tts_empty_text():
-    provider = LocalTTSProvider()
-    
+
+def test_local_tts_missing_model_file(tmp_path):
+    """Verify missing model or config raises TTSError(TTS_UNAVAILABLE)."""
+    model_path = str(tmp_path / "non_existent.onnx")
+    provider = LocalTTSProvider(model_path=model_path, backend="python")
+
     with pytest.raises(TTSError) as exc:
+        asyncio.run(provider.synthesize("s1", "r1", "Hello"))
+
+    assert exc.value.code == TTSErrorCode.TTS_UNAVAILABLE
+
+
+def test_local_tts_strict_backend_rejection(tmp_path):
+    """Verify unknown backend or missing python library rejects without silent fallback."""
+    model_path = str(tmp_path / "test.onnx")
+    config_path = str(tmp_path / "test.onnx.json")
+    with open(model_path, "w") as f:
+        f.write("mock")
+    with open(config_path, "w") as f:
+        f.write("{}")
+
+    provider = LocalTTSProvider(model_path=model_path, config_path=config_path, backend="invalid_backend")
+    with pytest.raises(TTSError) as exc:
+        asyncio.run(provider.synthesize("s1", "r1", "Hello"))
+
+    assert exc.value.code == TTSErrorCode.TTS_UNAVAILABLE
+
+
+def test_local_tts_empty_and_oversized_text():
+    """Verify empty text and text > 4096 chars are rejected."""
+    provider = LocalTTSProvider()
+
+    with pytest.raises(TTSError) as exc1:
         asyncio.run(provider.synthesize("s1", "r1", ""))
-        
-    assert exc.value.code == TTSErrorCode.INTERNAL_FAILURE
+    assert exc1.value.code == TTSErrorCode.INTERNAL_FAILURE
+
+    oversized = "a" * 4097
+    with pytest.raises(TTSError) as exc2:
+        asyncio.run(provider.synthesize("s1", "r1", oversized))
+    assert exc2.value.code == TTSErrorCode.INTERNAL_FAILURE
 
 
 def test_null_playback_sink():
     sink = NullPlaybackSink()
-    
     asyncio.run(sink.play(b"audio"))
     assert sink.played_audio == b"audio"
-    
-    # Cancel and play again
+
     sink.cancel()
     asyncio.run(sink.play(b"more_audio"))
-    
-    # Should not append because cancelled
     assert sink.played_audio == b"audio"
 
-@patch("alex_local_tts._HAS_LOCAL_TTS", False)
-def test_local_tts_unavailable():
-    provider = LocalTTSProvider()
-    
-    with pytest.raises(TTSError) as exc:
-        asyncio.run(provider.synthesize("s1", "r1", "Hello"))
-        
-    assert exc.value.code == TTSErrorCode.TTS_UNAVAILABLE
