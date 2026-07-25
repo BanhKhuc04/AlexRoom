@@ -30,6 +30,8 @@ class FasterWhisperSTTProvider:
         self.device = device or os.environ.get("ALEX_STT_DEVICE", "cpu")
         self.compute_type = compute_type or os.environ.get("ALEX_STT_COMPUTE_TYPE", "int8")
         self.language = language or os.environ.get("ALEX_STT_LANGUAGE", "vi")
+        self.vad_enabled = str(os.environ.get("ALEX_STT_VAD_ENABLED", "true")).lower() == "true"
+        self.vad_min_silence_ms = int(os.environ.get("ALEX_STT_VAD_MIN_SILENCE_MS", 500))
         self.model = None
 
         if _HAS_WHISPER:
@@ -88,12 +90,18 @@ class FasterWhisperSTTProvider:
             tmp.write(wav_bytes)
             tmp_path = tmp.name
 
+        vad_kwargs = {}
+        if self.vad_enabled:
+            vad_kwargs["vad_filter"] = True
+            vad_kwargs["vad_parameters"] = {"min_silence_duration_ms": self.vad_min_silence_ms}
+
         try:
             segments, info = self.model.transcribe(
                 tmp_path,
                 beam_size=5,
                 language=self.language,
                 condition_on_previous_text=False,
+                **vad_kwargs
             )
             text = "".join([segment.text for segment in segments])
             return text.strip()

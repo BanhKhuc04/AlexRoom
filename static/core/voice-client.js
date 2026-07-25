@@ -133,6 +133,12 @@ export class VoiceClient {
     if (msg.error_code) {
       this.callbacks.onError?.(msg.error_code);
     }
+
+    if (msg.type === "no_speech") {
+      this.callbacks.onAssistantText?.("Không nghe thấy giọng nói.");
+      this.state = "cancelled";
+      this.callbacks.onStateChange?.("cancelled");
+    }
   }
 
   /**

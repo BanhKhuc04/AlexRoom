@@ -35,7 +35,7 @@ def test_e2e_voice_pipeline():
         # 4. TTS Provider
         tts_provider = AsyncMock()
         tts_provider.synthesize.return_value = TTSResult(
-            session_id="session_1", request_id="req_1", audio_data=b"tts_audio", provider="mock_tts"
+            session_id="session_1", request_id="req_1", audio_data=b"tts_audio_data_padding_" * 5, provider="mock_tts"
         )
         
         # 5. Playback Sink
@@ -67,7 +67,7 @@ def test_e2e_voice_pipeline():
         tts_provider.synthesize.assert_called_once_with("session_1", "req_1", "Đã bật đèn.")
         
         # Verify Audio was played back
-        playback_sink.play.assert_called_once_with(b"tts_audio")
+        playback_sink.play.assert_called_once_with(b"tts_audio_data_padding_" * 5)
         
         # Verify websocket client received final completed status
         ws.send_json.assert_any_call({

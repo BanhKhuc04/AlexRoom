@@ -129,7 +129,7 @@ def test_process_voice_final_transcript_chat():
     
     response = process_voice_transcript(session, voice_input, router)
     
-    assert response.state == VoiceSessionState.COMPLETED
+    assert response.state == VoiceSessionState.THINKING
     assert response.assistant_text == "I can help with that."
     assert response.session_id == "session-123"
     assert response.request_id == "req-456"
@@ -171,7 +171,7 @@ def test_process_voice_final_transcript_acting():
     
     response = process_voice_transcript(session, voice_input, router)
     
-    assert response.state == VoiceSessionState.COMPLETED
+    assert response.state == VoiceSessionState.ACTING
     assert VoiceSessionState.ACTING in transitions_seen
 
 

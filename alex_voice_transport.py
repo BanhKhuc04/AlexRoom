@@ -187,6 +187,16 @@ class BoundedAudioTransport:
             # Explicitly clear audio memory once passed to STT
             audio_buffer.clear()
             
+            if not stt_result.transcript.strip():
+                if not websocket.client_state.name == "DISCONNECTED":
+                    await websocket.send_json({
+                        "type": "no_speech",
+                        "session_id": session_id,
+                        "request_id": request_id
+                    })
+                session.transition_to(VoiceSessionState.COMPLETED)
+                return
+
             if not websocket.client_state.name == "DISCONNECTED":
                 await websocket.send_json({
                     "type": "transcript_final",
@@ -220,6 +230,18 @@ class BoundedAudioTransport:
             
             response = process_voice_transcript(session, voice_input, router)
             
+            if response.state == VoiceSessionState.FAILED:
+                if not websocket.client_state.name == "DISCONNECTED":
+                    await websocket.send_json({
+                        "type": "error",
+                        "session_id": session_id,
+                        "request_id": request_id,
+                        "error_code": response.error_code or "internal_error",
+                        "detail": "Không có phản hồi từ hệ thống."
+                    })
+                    await websocket.close()
+                return
+            
             if response.assistant_text and not websocket.client_state.name == "DISCONNECTED":
                 await websocket.send_json({
                     "type": "assistant_text",
@@ -233,7 +255,8 @@ class BoundedAudioTransport:
             if response.assistant_text and self.tts_provider:
                 try:
                     tts_result = await self.tts_provider.synthesize(session_id, request_id, response.assistant_text)
-                    if tts_result and tts_result.audio_data:
+                    if tts_result and tts_result.audio_data and len(tts_result.audio_data) > 44:
+                        session.transition_to(VoiceSessionState.SPEAKING)
                         audio_b64 = base64.b64encode(tts_result.audio_data).decode("utf-8")
                         if not websocket.client_state.name == "DISCONNECTED":
                             await websocket.send_json({
@@ -243,6 +266,8 @@ class BoundedAudioTransport:
                                 "audio_base64": audio_b64,
                                 "audio_format": tts_result.metadata.get("audio_format", "wav"),
                                 "sample_rate": tts_result.metadata.get("sample_rate", 22050),
+                                "channels": tts_result.metadata.get("channels", 1),
+                                "sample_width": tts_result.metadata.get("sample_width", 2)
                             })
 
                         if self.playback_sink and hasattr(self.playback_sink, "play"):
@@ -261,7 +286,7 @@ class BoundedAudioTransport:
                             "detail": str(tts_err)
                         })
             
-            if response.state == VoiceSessionState.SPEAKING:
+            if session.state in (VoiceSessionState.THINKING, VoiceSessionState.ACTING, VoiceSessionState.SPEAKING):
                 session.transition_to(VoiceSessionState.COMPLETED)
             
             if not websocket.client_state.name == "DISCONNECTED":

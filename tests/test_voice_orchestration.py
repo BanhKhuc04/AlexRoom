@@ -25,7 +25,7 @@ def test_bare_in_orchestration_pipeline_success():
         
         tts_provider = AsyncMock()
         tts_provider.synthesize.return_value = TTSResult(
-            session_id="s1", request_id="r1", audio_data=b"tts_audio", provider="mock_tts"
+            session_id="s1", request_id="r1", audio_data=b"tts_audio_data_padding_" * 5, provider="mock_tts"
         )
         
         playback_sink = AsyncMock()
@@ -48,7 +48,7 @@ def test_bare_in_orchestration_pipeline_success():
         stt_provider.transcribe.assert_called_once_with("s1", "r1", b"audio_data")
         router_dispatch.assert_called_once()
         tts_provider.synthesize.assert_called_once_with("s1", "r1", "Đã bật đèn.")
-        playback_sink.play.assert_called_once_with(b"tts_audio")
+        playback_sink.play.assert_called_once_with(b"tts_audio_data_padding_" * 5)
         
         ws.send_json.assert_any_call({
             "type": "completed",

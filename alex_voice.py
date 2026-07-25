@@ -38,6 +38,7 @@ class VoiceErrorCode(str, Enum):
     CANCELLED = "cancelled"
     INVALID_TRANSITION = "invalid_transition"
     INTERNAL_ERROR = "internal_error"
+    EMPTY_RESPONSE = "empty_response"
 
 
 class VoiceSessionError(Exception):
@@ -89,11 +90,13 @@ class VoiceSessionLifecycle:
         VoiceSessionState.THINKING: {
             VoiceSessionState.ACTING,
             VoiceSessionState.SPEAKING,
+            VoiceSessionState.COMPLETED,
             VoiceSessionState.CANCELLED,
             VoiceSessionState.FAILED
         },
         VoiceSessionState.ACTING: {
             VoiceSessionState.SPEAKING,
+            VoiceSessionState.COMPLETED,
             VoiceSessionState.CANCELLED,
             VoiceSessionState.FAILED
         },
@@ -135,7 +138,7 @@ class VoiceSessionLifecycle:
                     self._state.value,
                     datetime.now(timezone.utc).isoformat()
                 )
-            except Exception:
+            except (Exception, ValueError):
                 pass
 
     @property
@@ -162,7 +165,7 @@ class VoiceSessionLifecycle:
                     self.session_id,
                     datetime.now(timezone.utc).isoformat()
                 )
-            except Exception:
+            except (Exception, ValueError):
                 pass
 
 
@@ -205,14 +208,32 @@ def process_voice_transcript(
             for t in response.tool_results
         )
         
-        # We can also rely on the route string if available.
-        # Phase 0.9 returns route="deterministic_safe_action", "execute_action", etc.
-        if response.route in ("deterministic_safe_action", "execute_action") or has_mutations:
+        is_action = response.route in ("deterministic_safe_action", "execute_action") or has_mutations
+        
+        if is_action:
             session.transition_to(VoiceSessionState.ACTING)
             
-        session.transition_to(VoiceSessionState.SPEAKING)
-        session.transition_to(VoiceSessionState.COMPLETED)
+        if not response.assistant_text and not is_action:
+            session.transition_to(VoiceSessionState.FAILED)
+            return VoiceResponse(
+                session_id=voice_input.session_id,
+                request_id=voice_input.request_id,
+                assistant_text=None,
+                state=session.state,
+                error_code="empty_response",
+                metadata={"route": response.route or "unknown"}
+            )
         
+        if session.state == VoiceSessionState.CANCELLED:
+            return VoiceResponse(
+                session_id=voice_input.session_id,
+                request_id=voice_input.request_id,
+                assistant_text=None,
+                state=VoiceSessionState.CANCELLED,
+                error_code=VoiceErrorCode.CANCELLED.value,
+                metadata={"route": response.route or "unknown"}
+            )
+            
         return VoiceResponse(
             session_id=voice_input.session_id,
             request_id=voice_input.request_id,
@@ -251,6 +272,7 @@ def process_voice_transcript(
             error_code=VoiceErrorCode.INVALID_TRANSITION.value
         )
     except Exception as e:
+        print("THE EXCEPTION WAS:", repr(e))
         session._state = VoiceSessionState.FAILED  # bypass transition checking for internal err
         return VoiceResponse(
             session_id=voice_input.session_id,

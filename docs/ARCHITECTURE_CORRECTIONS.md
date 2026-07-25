@@ -17,6 +17,10 @@ This register documents architectural debt and corrections identified during Pha
 - **Stale Service Worker / Cache Version**: Cache version `safety-v4` was obsolete and prevented updated JS modules from activating without manual browser cache purges.
 - **Local TTS Engine Integration**: Placeholder synthesis replaced with real Piper TTS production runtime (`piper-tts==1.5.0` with `vi_VN-vais1000-medium`) on ALEX Brain PC, featuring WAV 22050 Hz container validation and speech pronunciation normalization.
 
+- **VAD/no-speech protection**: VAD filter prevents silence hallucination.
+- **Truthful speaking/audio contract**: Validates real TTS WAV frames before emitting speaking events.
+- **Browser playback completion**: Ensures real audio is decoded and managed.
+- **Empty conversational result handling**: Short-circuits empty chat results to a truthful failed state rather than fake speaking.
 
 ---
 
@@ -29,6 +33,18 @@ This register documents architectural debt and corrections identified during Pha
 - **Multi-Turn Conversation Persistence**: Long-term conversational context history storage across browser reloads.
 - **Hardware Wake-Word Model**: Physical wake-word DSP chip integration on ESP32/Orange Pi hardware.
 - **Multi-Client Voice Arbitration**: Concurrently arbitrating multiple active microphone sessions across separate browser clients.
+- **realtime streaming STT**: Continuous websocket audio ingest.
+- **partial transcription**: Interim hypotheses.
+- **Smart Turn / semantic endpointing**: Semantic end-of-speech detection.
+- **streaming LLM tokens**: Word-by-word LLM output stream.
+- **streaming Piper**: Piped TTS generation.
+- **preemptive generation**: Anticipating TTS needs before sentence boundary.
+- **conversation/session memory improvements**: Rich multi-turn memory.
+- **bilingual automatic routing**: Automatic STT/TTS language routing.
+- **robot voice DSP**: JARVIS-like voice effects.
+- **whisper.cpp benchmark**: Edge ML execution.
+- **llama.cpp local fast path**: Local local LLM execution.
+- **hybrid cloud intelligence**: Local/Cloud fallback orchestration.
 
 ---
 
