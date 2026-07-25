@@ -99,3 +99,43 @@ def test_faster_whisper_no_silent_fallback_to_tiny():
         assert "FasterWhisper model 'small' is not available" in str(exc.value)
 
 
+def test_faster_whisper_singleton_model_reused():
+    """Verify get_stt_provider returns cached singleton instance per Brain process."""
+    from brain_service.app import get_stt_provider, _STT_PROVIDER
+    with patch("brain_service.app._STT_PROVIDER", None):
+        p1 = get_stt_provider()
+        p2 = get_stt_provider()
+        assert p1 is p2
+
+
+def test_stt_existing_wav_not_double_wrapped():
+    """Verify valid 16kHz WAV payload passes through raw_pcm16le_to_wav unchanged."""
+    from alex_audio import raw_pcm16le_to_wav
+    import io, wave
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b"\x00\x00" * 50)
+    original_wav = buf.getvalue()
+
+    result_wav = raw_pcm16le_to_wav(original_wav, sample_rate=16000, channels=1)
+    assert result_wav == original_wav
+
+
+def test_stt_changes_do_not_affect_tts(tmp_path):
+    """Verify STT provider changes do not affect LocalTTSProvider."""
+    from alex_local_tts import LocalTTSProvider
+    model_path = str(tmp_path / "tts.onnx")
+    config_path = str(tmp_path / "tts.onnx.json")
+    with open(model_path, "w") as f:
+        f.write("mock")
+    with open(config_path, "w") as f:
+        f.write("{}")
+
+    tts_provider = LocalTTSProvider(model_path=model_path, config_path=config_path)
+    assert tts_provider.backend == "python"
+
+
+
