@@ -38,6 +38,36 @@ const realtime = new AlexRealtime({
 const alexState = createAlexStateMachine();
 const systemReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
+/** @type {AppMode} */
+let appMode = "presence";
+/** @type {keyof typeof WORKSPACES} */
+let activeWorkspace = "overview";
+/** @type {SystemSnapshot | null} */
+let snapshot = null;
+/** @type {DeviceCommand | null} */
+let activeCommand = null;
+/** @type {number | null} */
+let pollTimer = null;
+/** @type {number | null} */
+let clockTimer = null;
+/** @type {number | null} */
+let idleTimer = null;
+let refreshInFlight = false;
+let destroyed = false;
+let lastSoundState = "idle";
+let userReducedMotion = localStorage.getItem("alexReducedMotion") === "true";
+/** @type {QualityMode} */
+let quality = normalizeQualityMode(localStorage.getItem("alexQuality"));
+let soundSettings = loadSoundSettings();
+
+function loadSoundSettings() {
+  try {
+    return normalizeSoundSettings(JSON.parse(localStorage.getItem("alexSoundSettings") ?? "{}"));
+  } catch {
+    return DEFAULT_SOUND_SETTINGS;
+  }
+}
+
 const voicePlayback = new VoicePlayback();
 
 const voiceClient = new VoiceClient({
