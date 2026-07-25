@@ -11,7 +11,14 @@ from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from alex_brain_tools import BrainChatRequest, BrainChatResponse
+from alex_brain_tools import (
+    BrainChatRequest,
+    BrainChatResponse,
+    BrainSTTRequest,
+    BrainSTTResponse,
+    BrainTTSRequest,
+    BrainTTSResponse,
+)
 from brain_service.config import BrainServiceConfig
 from brain_service.provider import (
     InvalidProviderResponseError,
@@ -263,6 +270,75 @@ def create_app(
             latency_ms=latency_ms,
         )
         return response
+
+    @brain_app.post(
+        "/v1/stt",
+        response_model=BrainSTTResponse,
+        responses={
+            401: {"model": BrainErrorResponse},
+            422: {"model": BrainErrorResponse},
+            503: {"model": BrainErrorResponse},
+        },
+    )
+    async def stt(
+        payload: BrainSTTRequest,
+        _: None = Depends(require_brain_api_key),
+    ) -> BrainSTTResponse:
+        import base64
+        try:
+            audio_bytes = base64.b64decode(payload.audio_base64)
+            from alex_local_stt import FasterWhisperSTTProvider
+            stt_provider = FasterWhisperSTTProvider()
+            result = await stt_provider.transcribe(payload.session_id, payload.request_id, audio_bytes)
+            return BrainSTTResponse(
+                session_id=payload.session_id,
+                request_id=payload.request_id,
+                transcript=result.transcript,
+                is_final=True,
+                provider="brain_stt",
+            )
+        except Exception as error:
+            _log_outcome("/v1/stt", "stt_unavailable", payload.request_id)
+            raise BrainHttpError(
+                503,
+                "stt_unavailable",
+                f"STT synthesis unavailable: {error}",
+                payload.request_id,
+            ) from error
+
+    @brain_app.post(
+        "/v1/tts",
+        response_model=BrainTTSResponse,
+        responses={
+            401: {"model": BrainErrorResponse},
+            422: {"model": BrainErrorResponse},
+            503: {"model": BrainErrorResponse},
+        },
+    )
+    async def tts(
+        payload: BrainTTSRequest,
+        _: None = Depends(require_brain_api_key),
+    ) -> BrainTTSResponse:
+        import base64
+        try:
+            from alex_local_tts import LocalTTSProvider
+            tts_provider = LocalTTSProvider()
+            result = await tts_provider.synthesize(payload.session_id, payload.request_id, payload.text)
+            audio_b64 = base64.b64encode(result.audio_data).decode("utf-8")
+            return BrainTTSResponse(
+                session_id=payload.session_id,
+                request_id=payload.request_id,
+                audio_base64=audio_b64,
+                provider="brain_tts",
+            )
+        except Exception as error:
+            _log_outcome("/v1/tts", "tts_unavailable", payload.request_id)
+            raise BrainHttpError(
+                503,
+                "tts_unavailable",
+                f"TTS synthesis unavailable: {error}",
+                payload.request_id,
+            ) from error
 
     return brain_app
 

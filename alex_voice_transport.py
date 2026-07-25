@@ -77,6 +77,13 @@ class BoundedAudioTransport:
         
         try:
             session.transition_to(VoiceSessionState.LISTENING)
+            if not websocket.client_state.name == "DISCONNECTED":
+                await websocket.send_json({
+                    "type": "auth_ok",
+                    "state": "listening",
+                    "session_id": session_id,
+                    "request_id": request_id
+                })
         except Exception:
             await websocket.close(code=1003)
             return
@@ -106,11 +113,20 @@ class BoundedAudioTransport:
                         
                     elif "text" in message:
                         text = message["text"]
-                        if text == "CANCEL":
-                            session.cancel()
-                            break
-                        if text == "DONE":
-                            break
+                        try:
+                            parsed_msg = json.loads(text)
+                            msg_type = parsed_msg.get("type")
+                            if msg_type in ["cancel", "CANCEL"]:
+                                session.cancel()
+                                break
+                            if msg_type in ["end_audio", "done", "DONE"]:
+                                break
+                        except Exception:
+                            if text in ["CANCEL", "cancel"]:
+                                session.cancel()
+                                break
+                            if text in ["DONE", "done", "end_audio"]:
+                                break
                             
         except asyncio.TimeoutError:
             logger.warning(f"Session {session_id} exceeded max duration")
@@ -126,7 +142,13 @@ class BoundedAudioTransport:
         if session.state == VoiceSessionState.CANCELLED:
             if not websocket.client_state.name == "DISCONNECTED":
                 try:
-                    await websocket.send_json({"state": "CANCELLED"})
+                    await websocket.send_json({
+                        "type": "completed",
+                        "state": "CANCELLED",
+                        "session_id": session_id,
+                        "request_id": request_id,
+                        "reason": "cancelled"
+                    })
                     await websocket.close()
                 except Exception:
                     pass
@@ -137,11 +159,41 @@ class BoundedAudioTransport:
         # Process the accumulated audio
         try:
             session.transition_to(VoiceSessionState.TRANSCRIBING)
+            if not websocket.client_state.name == "DISCONNECTED":
+                await websocket.send_json({
+                    "type": "transcribing",
+                    "session_id": session_id,
+                    "request_id": request_id
+                })
             
-            stt_result = await self.stt_provider.transcribe(session_id, request_id, bytes(audio_buffer))
-            
+            try:
+                stt_result = await self.stt_provider.transcribe(session_id, request_id, bytes(audio_buffer))
+            except Exception as stt_err:
+                logger.error(f"STT failed for {session_id}: {stt_err}")
+                if not websocket.client_state.name == "DISCONNECTED":
+                    raw_code = getattr(stt_err, "code", "stt_unavailable")
+                    error_code = getattr(raw_code, "value", str(raw_code))
+                    await websocket.send_json({
+                        "type": "error",
+                        "session_id": session_id,
+                        "request_id": request_id,
+                        "error_code": str(error_code),
+                        "detail": str(stt_err)
+                    })
+                    await websocket.close()
+                audio_buffer.clear()
+                return
+
             # Explicitly clear audio memory once passed to STT
             audio_buffer.clear()
+            
+            if not websocket.client_state.name == "DISCONNECTED":
+                await websocket.send_json({
+                    "type": "transcript_final",
+                    "session_id": session_id,
+                    "request_id": request_id,
+                    "transcript": stt_result.transcript
+                })
             
             voice_input = VoiceInput(
                 session_id=session_id,
@@ -152,8 +204,14 @@ class BoundedAudioTransport:
                 created_at="now"
             )
             
-            # Use IntelligenceRouter integration from C1
-            # Mocking router_dispatch interface (obj with dispatch method)
+            if not websocket.client_state.name == "DISCONNECTED":
+                await websocket.send_json({
+                    "type": "thinking",
+                    "session_id": session_id,
+                    "request_id": request_id
+                })
+
+            # Use IntelligenceRouter integration
             class RouterAdapter:
                 def dispatch(self, req):
                     return self._dispatch(req)
@@ -162,29 +220,53 @@ class BoundedAudioTransport:
             
             response = process_voice_transcript(session, voice_input, router)
             
-            # Phase 1.0 C7: Bare-In Orchestration Pipeline Integration
-            # If the response contains text to speak, synthesize and play
-            audio_response = None
-            if response.assistant_text and self.tts_provider and self.playback_sink:
+            if response.assistant_text and not websocket.client_state.name == "DISCONNECTED":
+                await websocket.send_json({
+                    "type": "assistant_text",
+                    "session_id": session_id,
+                    "request_id": request_id,
+                    "text": response.assistant_text
+                })
+
+            # TTS Audio Return Path
+            import base64
+            if response.assistant_text and self.tts_provider:
                 try:
-                    # process_voice_transcript already transitions to SPEAKING if needed
                     tts_result = await self.tts_provider.synthesize(session_id, request_id, response.assistant_text)
-                    audio_response = tts_result.audio_data
-                    
-                    # Play the audio
-                    await self.playback_sink.play(audio_response)
-                except Exception as e:
-                    logger.error(f"TTS/Playback error for {session_id}: {e}")
-                    # Failure to speak does not fail the whole session's core intent
+                    if tts_result and tts_result.audio_data:
+                        audio_b64 = base64.b64encode(tts_result.audio_data).decode("utf-8")
+                        if not websocket.client_state.name == "DISCONNECTED":
+                            await websocket.send_json({
+                                "type": "speaking",
+                                "session_id": session_id,
+                                "request_id": request_id,
+                                "audio_base64": audio_b64
+                            })
+                        if self.playback_sink and hasattr(self.playback_sink, "play"):
+                            try:
+                                await self.playback_sink.play(tts_result.audio_data)
+                            except Exception:
+                                pass
+                except Exception as tts_err:
+                    logger.warning(f"TTS synthesis failed for {session_id}: {tts_err}")
+                    if not websocket.client_state.name == "DISCONNECTED":
+                        await websocket.send_json({
+                            "type": "error",
+                            "session_id": session_id,
+                            "request_id": request_id,
+                            "error_code": "tts_unavailable",
+                            "detail": str(tts_err)
+                        })
             
             if response.state == VoiceSessionState.SPEAKING:
                 session.transition_to(VoiceSessionState.COMPLETED)
             
             if not websocket.client_state.name == "DISCONNECTED":
-                # For transport we may want to send the audio back if it's a remote client,
-                # but local playback sink handles it if it's local. We'll send the state anyway.
                 await websocket.send_json({
+                    "type": "completed",
                     "state": session.state.value,
+                    "session_id": session_id,
+                    "request_id": request_id,
                     "transcript": stt_result.transcript,
                     "assistant_text": response.assistant_text,
                     "error_code": response.error_code
@@ -193,6 +275,17 @@ class BoundedAudioTransport:
         except Exception as e:
             logger.error(f"Processing error for {session_id}: {e}")
             session.cancel()
+            if not websocket.client_state.name == "DISCONNECTED":
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "session_id": session_id,
+                        "request_id": request_id,
+                        "error_code": "internal_failure",
+                        "detail": str(e)
+                    })
+                except Exception:
+                    pass
             
         # Cleanup
         if not websocket.client_state.name == "DISCONNECTED":

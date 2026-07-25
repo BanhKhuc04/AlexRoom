@@ -70,8 +70,11 @@ def test_e2e_voice_pipeline():
         playback_sink.play.assert_called_once_with(b"tts_audio")
         
         # Verify websocket client received final completed status
-        ws.send_json.assert_called_once_with({
+        ws.send_json.assert_any_call({
+            "type": "completed",
             "state": VoiceSessionState.COMPLETED.value,
+            "session_id": "session_1",
+            "request_id": "req_1",
             "transcript": "Bật đèn",
             "assistant_text": "Đã bật đèn.",
             "error_code": None

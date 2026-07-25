@@ -85,7 +85,13 @@ def test_voice_websocket_session_byte_limit():
         await v1_voice_stream(ws, "s1", "r1")
         
         # Should send CANCELLED due to exceeding limit
-        ws.send_json.assert_called_with({"state": "CANCELLED"})
+        ws.send_json.assert_any_call({
+            "type": "completed",
+            "state": "CANCELLED",
+            "session_id": "s1",
+            "request_id": "r1",
+            "reason": "cancelled"
+        })
     asyncio.run(run())
 
 def test_voice_websocket_chunk_byte_limit():
@@ -103,6 +109,12 @@ def test_voice_websocket_chunk_byte_limit():
         await v1_voice_stream(ws, "s1", "r1")
         
         # Should send CANCELLED due to exceeding limit
-        ws.send_json.assert_called_with({"state": "CANCELLED"})
+        ws.send_json.assert_any_call({
+            "type": "completed",
+            "state": "CANCELLED",
+            "session_id": "s1",
+            "request_id": "r1",
+            "reason": "cancelled"
+        })
     asyncio.run(run())
 

@@ -417,6 +417,34 @@ class BrainChatResponse(StrictContractModel):
         return self
 
 
+class BrainSTTRequest(StrictContractModel):
+    session_id: str = Field(min_length=1, max_length=MAX_REQUEST_ID_LENGTH, pattern=BOUNDED_ID_PATTERN)
+    request_id: str = Field(min_length=1, max_length=MAX_REQUEST_ID_LENGTH, pattern=BOUNDED_ID_PATTERN)
+    audio_base64: str = Field(min_length=1)
+    language: str = Field(default="vi", max_length=10)
+
+
+class BrainSTTResponse(StrictContractModel):
+    session_id: str = Field(min_length=1, max_length=MAX_REQUEST_ID_LENGTH, pattern=BOUNDED_ID_PATTERN)
+    request_id: str = Field(min_length=1, max_length=MAX_REQUEST_ID_LENGTH, pattern=BOUNDED_ID_PATTERN)
+    transcript: str = Field(default="", max_length=MAX_TEXT_LENGTH)
+    is_final: bool = Field(default=True)
+    provider: str = Field(default="brain_stt", max_length=64)
+
+
+class BrainTTSRequest(StrictContractModel):
+    session_id: str = Field(min_length=1, max_length=MAX_REQUEST_ID_LENGTH, pattern=BOUNDED_ID_PATTERN)
+    request_id: str = Field(min_length=1, max_length=MAX_REQUEST_ID_LENGTH, pattern=BOUNDED_ID_PATTERN)
+    text: str = Field(min_length=1, max_length=MAX_TEXT_LENGTH)
+
+
+class BrainTTSResponse(StrictContractModel):
+    session_id: str = Field(min_length=1, max_length=MAX_REQUEST_ID_LENGTH, pattern=BOUNDED_ID_PATTERN)
+    request_id: str = Field(min_length=1, max_length=MAX_REQUEST_ID_LENGTH, pattern=BOUNDED_ID_PATTERN)
+    audio_base64: str = Field(default="")
+    provider: str = Field(default="brain_tts", max_length=64)
+
+
 class BrainRecordStore(Protocol):
     def get_record(self, domain: str, record_id: str) -> dict[str, object] | None: ...
 

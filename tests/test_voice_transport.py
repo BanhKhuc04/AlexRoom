@@ -41,8 +41,11 @@ def test_bounded_audio_transport_success():
         stt_provider.transcribe.assert_called_once_with("s1", "r1", b"audio_data")
         router_dispatch.assert_called_once()
         
-        ws.send_json.assert_called_once_with({
+        ws.send_json.assert_any_call({
+            "type": "completed",
             "state": VoiceSessionState.COMPLETED.value,
+            "session_id": "s1",
+            "request_id": "r1",
             "transcript": "test",
             "assistant_text": "OK",
             "error_code": None
@@ -73,7 +76,13 @@ def test_bounded_audio_transport_cancel():
         stt_provider.transcribe.assert_not_called()
         router_dispatch.assert_not_called()
         
-        ws.send_json.assert_called_once_with({"state": "CANCELLED"})
+        ws.send_json.assert_any_call({
+            "type": "completed",
+            "state": "CANCELLED",
+            "session_id": "s1",
+            "request_id": "r1",
+            "reason": "cancelled"
+        })
         ws.close.assert_called_once()
     asyncio.run(run())
 

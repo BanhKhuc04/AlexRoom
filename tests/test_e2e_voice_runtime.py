@@ -105,8 +105,11 @@ def test_e2e_voice_transport_lifecycle():
         await transport.handle_websocket(ws, "s-e2e-1", "r-e2e-1")
 
         ws.accept.assert_called_once()
-        ws.send_json.assert_called_once_with({
+        ws.send_json.assert_any_call({
+            "type": "completed",
             "state": VoiceSessionState.COMPLETED.value,
+            "session_id": "s-e2e-1",
+            "request_id": "r-e2e-1",
             "transcript": "bật test led",
             "assistant_text": "Đã bật test led.",
             "error_code": None
@@ -139,7 +142,13 @@ def test_e2e_voice_transport_barge_in():
 
         await transport.handle_websocket(ws, "s-cancel-1", "r-cancel-1")
 
-        ws.send_json.assert_called_once_with({"state": "CANCELLED"})
+        ws.send_json.assert_any_call({
+            "type": "completed",
+            "state": "CANCELLED",
+            "session_id": "s-cancel-1",
+            "request_id": "r-cancel-1",
+            "reason": "cancelled"
+        })
         ws.close.assert_called_once()
 
     asyncio.run(run())

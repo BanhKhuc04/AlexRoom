@@ -50,8 +50,11 @@ def test_bare_in_orchestration_pipeline_success():
         tts_provider.synthesize.assert_called_once_with("s1", "r1", "Đã bật đèn.")
         playback_sink.play.assert_called_once_with(b"tts_audio")
         
-        ws.send_json.assert_called_once_with({
+        ws.send_json.assert_any_call({
+            "type": "completed",
             "state": VoiceSessionState.COMPLETED.value,
+            "session_id": "s1",
+            "request_id": "r1",
             "transcript": "Bật đèn",
             "assistant_text": "Đã bật đèn.",
             "error_code": None
