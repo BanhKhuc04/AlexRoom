@@ -111,8 +111,16 @@ def validate_wav_pcm(
                 raise AudioValidationError(f"Unsupported sample width: {w_sampwidth} bytes")
             if w_rate < min_sample_rate or w_rate > max_sample_rate:
                 raise AudioValidationError(f"Sample rate {w_rate} Hz out of bounds [{min_sample_rate}, {max_sample_rate}]")
+            if w_frames <= 0:
+                raise AudioValidationError("Empty audio payload: zero audio frames in WAV container")
+
+            pcm_payload_bytes = w_frames * w_channels * w_sampwidth
+            if pcm_payload_bytes <= 0:
+                raise AudioValidationError("Empty audio payload: zero PCM sample bytes in WAV container")
 
             duration = w_frames / float(w_rate) if w_rate > 0 else 0.0
+            if duration <= 0.0:
+                raise AudioValidationError("Empty audio payload: duration_seconds must be greater than 0")
 
             return {
                 "sample_rate": w_rate,
@@ -121,6 +129,7 @@ def validate_wav_pcm(
                 "frame_count": w_frames,
                 "duration_seconds": duration,
             }
+
     except (wave.Error, EOFError, struct.error, ValueError) as err:
         raise AudioValidationError(f"Corrupted WAV audio header: {err}") from err
 

@@ -43,7 +43,7 @@ def test_pronunciation_normalization_boundary():
 
 
 def test_local_tts_python_backend_success(tmp_path):
-    """Verify python backend synthesizes valid WAV using cached PiperVoice."""
+    """Verify python backend invokes synthesize_wav with normalized text and returns real non-empty WAV."""
     model_path = str(tmp_path / "test.onnx")
     config_path = str(tmp_path / "test.onnx.json")
     with open(model_path, "w") as f:
@@ -51,23 +51,62 @@ def test_local_tts_python_backend_success(tmp_path):
     with open(config_path, "w") as f:
         f.write("{}")
 
-    valid_wav = create_test_wav_bytes(sample_rate=22050)
+    valid_wav = create_test_wav_bytes(sample_rate=22050, duration_sec=0.2)
+    raw_frames = valid_wav[44:]
 
     mock_voice = MagicMock()
-    def mock_synth(text, wav_out):
-        wav_out.writeframes(valid_wav[44:]) # write raw frames into wave writer
-    mock_voice.synthesize = mock_synth
+    called_text = []
+    def mock_synth_wav(text, wav_out):
+        called_text.append(text)
+        wav_out.setnchannels(1)
+        wav_out.setsampwidth(2)
+        wav_out.setframerate(22050)
+        wav_out.writeframes(raw_frames)
+
+    mock_voice.synthesize_wav = mock_synth_wav
 
     provider = LocalTTSProvider(model_path=model_path, config_path=config_path, backend="python")
     provider._piper_voice = mock_voice
     provider._voice_loaded = True
 
-    result = asyncio.run(provider.synthesize("s1", "r1", "Xin chào ALEX"))
+    display_text = "Xin chào ALEX"
+    result = asyncio.run(provider.synthesize("s1", "r1", display_text))
+    
+    # 1. Display text is unmodified outside TTS
+    assert display_text == "Xin chào ALEX"
+    # 2. Pronunciation-normalized text was passed to Piper
+    assert called_text == ["Xin chào A-lếch"]
+    # 3. Audio binary assertions
     assert result.session_id == "s1"
     assert result.request_id == "r1"
     assert result.provider == "local_tts"
+    assert len(result.audio_data) > 44
     assert result.metadata["sample_rate"] == 22050
     assert result.metadata["channels"] == 1
+    assert result.metadata["duration_seconds"] > 0
+
+
+def test_local_tts_python_backend_missing_synthesize_wav_fails(tmp_path):
+    """Verify python backend fails truthfully if PiperVoice runtime lacks synthesize_wav method."""
+    model_path = str(tmp_path / "test.onnx")
+    config_path = str(tmp_path / "test.onnx.json")
+    with open(model_path, "w") as f:
+        f.write("mock")
+    with open(config_path, "w") as f:
+        f.write("{}")
+
+    mock_voice = MagicMock(spec=["synthesize"])  # has synthesize, but NOT synthesize_wav
+
+    provider = LocalTTSProvider(model_path=model_path, config_path=config_path, backend="python")
+    provider._piper_voice = mock_voice
+    provider._voice_loaded = True
+
+    with pytest.raises(TTSError) as exc:
+        asyncio.run(provider.synthesize("s1", "r1", "Hello"))
+
+    assert exc.value.code == TTSErrorCode.TTS_UNAVAILABLE
+    assert "missing required synthesize_wav method" in str(exc.value)
+
 
 
 def test_local_tts_missing_model_file(tmp_path):

@@ -148,3 +148,12 @@ def test_validate_wav_pcm_non_wav_rejection():
     with pytest.raises(AudioValidationError, match="expected valid RIFF/WAVE"):
         validate_wav_pcm(b"NOT_A_WAVE_CONTAINER_DATA_HERE")
 
+
+def test_validate_wav_pcm_zero_frames_44byte_empty_wav_rejection():
+    """Verify 44-byte empty RIFF/WAVE header with zero frames is strictly rejected."""
+    empty_wav = create_pcm16_le_wav_fixture(sample_rate=22050, duration_sec=0.0)
+    assert len(empty_wav) == 44
+    with pytest.raises(AudioValidationError, match="zero audio frames"):
+        validate_wav_pcm(empty_wav)
+
+

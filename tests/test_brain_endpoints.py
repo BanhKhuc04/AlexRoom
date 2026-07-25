@@ -79,7 +79,13 @@ def test_brain_tts_endpoint_success(client):
         assert data["request_id"] == "r-tts-1"
         audio_bytes = base64.b64decode(data["audio_base64"])
         assert audio_bytes == valid_wav
+        assert len(audio_bytes) > 44
+        import wave, io
+        with wave.open(io.BytesIO(audio_bytes), "rb") as wav:
+            assert wav.getnframes() > 0
+            assert (wav.getnframes() / float(wav.getframerate())) > 0.0
         assert data["provider"] == "brain_tts"
         assert data["sample_rate"] == 22050
         assert "tool_calls" not in data
+
 

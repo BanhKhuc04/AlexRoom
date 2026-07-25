@@ -197,23 +197,18 @@ class LocalTTSProvider:
                 TTSErrorCode.TTS_UNAVAILABLE, "PiperVoice runtime not loaded"
             )
 
+        if not hasattr(self._piper_voice, "synthesize_wav"):
+            raise TTSError(
+                TTSErrorCode.TTS_UNAVAILABLE,
+                "PiperVoice runtime missing required synthesize_wav method",
+            )
+
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wav_out:
-            wav_out.setnchannels(1)
-            wav_out.setsampwidth(2)
-            wav_out.setframerate(22050)
-            if hasattr(self._piper_voice, "synthesize"):
-                self._piper_voice.synthesize(text, wav_out)
-            elif hasattr(self._piper_voice, "synthesize_stream_raw"):
-                raw_pcm = self._piper_voice.synthesize_stream_raw(text)
-                wav_out.writeframes(b"".join(raw_pcm))
-            else:
-                raise TTSError(
-                    TTSErrorCode.INTERNAL_FAILURE,
-                    "Incompatible PiperVoice Python API signature",
-                )
+            self._piper_voice.synthesize_wav(text, wav_out)
 
         return buf.getvalue()
+
 
 
     async def _synthesize_subprocess(self, text: str) -> bytes:

@@ -82,3 +82,29 @@ def test_brain_tts_provider_unavailable():
         assert exc_info.value.code == TTSErrorCode.TTS_UNAVAILABLE
 
     asyncio.run(run())
+
+
+def test_brain_tts_provider_rejects_zero_frame_44byte_wav():
+    async def run():
+        from tests.test_audio_contract import create_pcm16_le_wav_fixture
+        import base64
+        empty_wav = create_pcm16_le_wav_fixture(sample_rate=22050, duration_sec=0.0)
+        assert len(empty_wav) == 44
+        wav_b64 = base64.b64encode(empty_wav).decode("utf-8")
+
+        mock_client = Mock(spec=CoreBrainClient)
+        mock_client.synthesize.return_value = {
+            "session_id": "s1",
+            "request_id": "r1",
+            "audio_base64": wav_b64,
+            "provider": "brain_tts",
+        }
+
+        tts = BrainTTSProvider(mock_client)
+        with pytest.raises(TTSError) as exc_info:
+            await tts.synthesize("s1", "r1", "Đã bật đèn.")
+
+        assert exc_info.value.code == TTSErrorCode.INTERNAL_FAILURE
+
+    asyncio.run(run())
+
