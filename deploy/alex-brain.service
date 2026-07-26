@@ -1,0 +1,22 @@
+[Unit]
+Description=ALEX Brain text-intelligence boundary
+After=network-online.target ollama.service
+Wants=network-online.target ollama.service
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=vanhkhuc
+Group=vanhkhuc
+WorkingDirectory=/opt/alex/AlexRoom
+EnvironmentFile=/etc/alex/alex-brain.env
+ExecStart=/opt/alex/AlexRoom/.venv/bin/python -m uvicorn brain_service.app:app --host 0.0.0.0 --port 8090
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=75
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

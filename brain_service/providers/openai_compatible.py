@@ -4,7 +4,7 @@ import json
 import socket
 import urllib.error
 import urllib.request
-from typing import Mapping, Protocol, Sequence
+from typing import Mapping, Protocol, Sequence, Iterator
 
 from brain_service.provider import (
     InvalidProviderResponseError,
@@ -28,6 +28,17 @@ class JsonHttpTransport(Protocol):
         payload: Mapping[str, object],
         timeout_seconds: float,
     ) -> dict[str, object]: ...
+
+    def post_json_stream(
+        self,
+        *,
+        url: str,
+        headers: Mapping[str, str],
+        payload: Mapping[str, object],
+        first_token_timeout_seconds: float,
+        idle_timeout_seconds: float,
+        hard_deadline_seconds: float,
+    ) -> Iterator[str]: ...
 
 
 class UrllibJsonTransport:
@@ -72,9 +83,83 @@ class UrllibJsonTransport:
             raise InvalidProviderResponseError("invalid_provider_response")
         return decoded
 
+    def _set_socket_timeout(self, response: object, timeout_seconds: float) -> None:
+        sock = None
+        if hasattr(response, "fp"):
+            fp = response.fp
+            if hasattr(fp, "raw") and hasattr(fp.raw, "_sock"):
+                sock = fp.raw._sock
+            elif hasattr(fp, "_sock"):
+                sock = fp._sock
+        if sock is None and hasattr(response, "raw") and hasattr(response.raw, "_sock"):
+            sock = response.raw._sock
+            
+        if sock is None or not hasattr(sock, "settimeout"):
+            raise ProviderUnavailableError("provider_unavailable")
+            
+        try:
+            sock.settimeout(timeout_seconds)
+        except OSError:
+            raise ProviderUnavailableError("provider_unavailable")
+
+    def post_json_stream(
+        self,
+        *,
+        url: str,
+        headers: Mapping[str, str],
+        payload: Mapping[str, object],
+        first_token_timeout_seconds: float,
+        idle_timeout_seconds: float,
+        hard_deadline_seconds: float,
+    ) -> Iterator[str]:
+        import time
+        request = urllib.request.Request(
+            url=url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers=dict(headers),
+            method="POST",
+        )
+        total_read = 0
+        start_time = time.monotonic()
+        first_token_received = False
+        try:
+            with urllib.request.urlopen(request, timeout=first_token_timeout_seconds) as response:
+                while True:
+                    now = time.monotonic()
+                    if now - start_time > hard_deadline_seconds:
+                        raise ProviderTimeoutError("provider_timeout")
+                    
+                    self._set_socket_timeout(
+                        response,
+                        idle_timeout_seconds if first_token_received else first_token_timeout_seconds
+                    )
+                    
+                    line = response.readline(65536)
+                    if not line:
+                        break
+                    first_token_received = True
+                    total_read += len(line)
+                    if total_read > MAX_UPSTREAM_RESPONSE_BYTES:
+                        raise InvalidProviderResponseError("invalid_provider_response")
+                    decoded = line.decode("utf-8").strip()
+                    if decoded:
+                        yield decoded
+        except urllib.error.HTTPError as error:
+            error.close()
+            raise ProviderUnavailableError("provider_unavailable") from None
+        except urllib.error.URLError as error:
+            if isinstance(error.reason, (TimeoutError, socket.timeout)):
+                raise ProviderTimeoutError("provider_timeout") from None
+            raise ProviderUnavailableError("provider_unavailable") from None
+        except (TimeoutError, socket.timeout):
+            raise ProviderTimeoutError("provider_timeout") from None
+        except OSError:
+            raise ProviderUnavailableError("provider_unavailable") from None
+
 
 class OpenAICompatibleProvider:
     name = "openai_compatible"
+    supports_warmup = False
 
     def __init__(
         self,
@@ -83,12 +168,18 @@ class OpenAICompatibleProvider:
         model: str | None,
         api_key: str | None,
         timeout_seconds: float,
+        stream_first_token_timeout_seconds: float = 15.0,
+        stream_idle_timeout_seconds: float = 10.0,
+        stream_hard_deadline_seconds: float = 120.0,
         transport: JsonHttpTransport | None = None,
     ) -> None:
         self.url = (url or "").strip()
         self.model = (model or "").strip()
         self.api_key = api_key
         self.timeout_seconds = timeout_seconds
+        self.stream_first_token_timeout_seconds = stream_first_token_timeout_seconds
+        self.stream_idle_timeout_seconds = stream_idle_timeout_seconds
+        self.stream_hard_deadline_seconds = stream_hard_deadline_seconds
         self.transport = transport or UrllibJsonTransport()
         self.configured = bool(self.url and self.model)
 
@@ -98,6 +189,7 @@ class OpenAICompatibleProvider:
         system_instruction: str,
         user_text: str,
         tools: Sequence[Mapping[str, object]],
+        generation_budget: int | None = None,
     ) -> ProviderReply:
         if not self.configured:
             raise ProviderNotConfiguredError("provider_not_configured")
@@ -105,21 +197,36 @@ class OpenAICompatibleProvider:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        payload: dict[str, object] = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": user_text},
+            ],
+        }
+        if generation_budget is not None:
+            payload["max_tokens"] = generation_budget
+        if tools:
+            payload["tools"] = list(tools)
+            payload["tool_choice"] = "auto"
         upstream = self.transport.post_json(
             url=self.url,
             headers=headers,
-            payload={
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": user_text},
-                ],
-                "tools": list(tools),
-                "tool_choice": "auto",
-            },
+            payload=payload,
             timeout_seconds=self.timeout_seconds,
         )
         return self._parse_response(upstream)
+
+    def warmup(
+        self,
+        *,
+        timeout_seconds: float,
+        system_instruction: str,
+        tools: Sequence[Mapping[str, object]],
+    ) -> None:
+        # A generic OpenAI-compatible endpoint has no portable preload
+        # contract. Startup reports this provider as warmup-not-supported.
+        del timeout_seconds, system_instruction, tools
 
     @staticmethod
     def _parse_response(upstream: dict[str, object]) -> ProviderReply:

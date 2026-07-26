@@ -36,3 +36,8 @@ firmware/esp01/include/config.h
 
 # Local PlatformIO Python environment
 firmware/esp01/.pio-venv/
+
+# Local AI repository snapshots
+repomix-output.xml
+
+gitleaks-report.json

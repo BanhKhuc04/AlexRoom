@@ -11,6 +11,7 @@ from fastapi import FastAPI
 class AsgiResponse:
     status_code: int
     body: bytes
+    headers: dict[str, str]
 
     @property
     def text(self) -> str:
@@ -117,4 +118,12 @@ class AsgiTestClient:
             for message in messages
             if message["type"] == "http.response.body"
         )
-        return AsgiResponse(status_code=int(start["status"]), body=response_body)
+        response_headers = {
+            bytes(name).decode("latin-1"): bytes(value).decode("latin-1")
+            for name, value in start.get("headers", [])
+        }
+        return AsgiResponse(
+            status_code=int(start["status"]),
+            body=response_body,
+            headers=response_headers,
+        )

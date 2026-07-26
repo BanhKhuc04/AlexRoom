@@ -4,6 +4,10 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Literal, Mapping
 
+from alex_command_verification import (
+    CommandVerificationState,
+    command_verification_result,
+)
 from alex_safety import CommandGateway, GatewayExecutionError
 
 
@@ -19,6 +23,7 @@ MutationOutcomeStatus = Literal["rejected", "pending", "confirmed", "failed"]
 MutationOutcomeReason = Literal[
     "safety_gateway_denied",
     "device_unavailable",
+    "command_in_progress",
     "command_not_created",
     "command_lifecycle_failed",
 ]
@@ -70,13 +75,18 @@ class CommandGatewaySetTestLedExecutor:
             )
         except GatewayExecutionError as error:
             safe_decision = self._safe_decision(error.decision.as_dict())
+            reason: MutationOutcomeReason = (
+                "command_in_progress"
+                if error.reason == "test_led_command_in_progress"
+                else "device_unavailable"
+            )
             return MutationOutcome(
                 status="rejected",
                 result={"safety_decision": safe_decision},
-                reason="device_unavailable",
+                reason=reason,
                 audit={
                     "safety_decision": safe_decision,
-                    "failure_category": "device_unavailable",
+                    "failure_category": reason,
                 },
             )
 
@@ -103,15 +113,22 @@ class CommandGatewaySetTestLedExecutor:
             self._gateway.command(command_id)
             or gateway_result.command
         )
+        verification = command_verification_result(authoritative)
         command = {
             key: authoritative.get(key)
             for key in self._COMMAND_FIELDS
         }
         phase = str(command["phase"])
-        if phase == "confirmed":
+        if verification.state is CommandVerificationState.VERIFIED:
             status: MutationOutcomeStatus = "confirmed"
             reason: MutationOutcomeReason | None = None
-        elif phase in {"failed", "timed_out", "cancelled"}:
+        elif verification.state in {
+            CommandVerificationState.PUBLISH_FAILED,
+            CommandVerificationState.ACK_TIMEOUT,
+            CommandVerificationState.VERIFICATION_TIMEOUT,
+            CommandVerificationState.VERIFICATION_FAILED,
+            CommandVerificationState.CANCELLED,
+        }:
             status = "failed"
             reason = "command_lifecycle_failed"
         else:
@@ -122,6 +139,7 @@ class CommandGatewaySetTestLedExecutor:
             status=status,
             result={
                 "command": command,
+                "verification": verification.to_compact_dict(),
                 "safety_decision": safe_decision,
             },
             reason=reason,

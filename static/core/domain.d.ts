@@ -40,6 +40,7 @@ export interface ConfigPayload {
   room_name: string;
   relay_names: Record<string, string>;
   relay_subtitles: Record<string, string>;
+  canonical_origin?: string;
 }
 
 export interface DevicePayload extends NodeVerification {
@@ -312,4 +313,13 @@ export interface SceneDefinition {
 export interface SceneRecord extends SceneDefinition {
   id: string;
   updated_at?: string;
+}
+
+export interface BrainChatResponse {
+  request_id: string;
+  assistant_text: string;
+  tool_calls: Array<{ id: string; name: string; arguments: Record<string, any> }>;
+  tool_results?: any[];
+  route?: string;
+  latency_ms: number;
 }

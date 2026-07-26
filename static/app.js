@@ -9,6 +9,11 @@ import { elements, query } from "./ui/elements-phase2.js";
 import { createPresenceCommands } from "./ui/presence-commands.js";
 import { createPresenceView } from "./ui/presence-view.js";
 import { WORKSPACES, renderWorkspace } from "./ui/workspaces.js";
+import { handleMicrophoneOriginPolicy } from "./core/origin-policy.js";
+
+import { VoiceClient } from "./core/voice-client.js";
+import { AudioRecorder } from "./core/audio-recorder.js";
+import { VoicePlayback } from "./core/voice-playback.js";
 
 /** @typedef {import("./core/alex-state.js").AlexVisualState} AlexVisualState */
 /** @typedef {import("./core/command-lifecycle.js").DeviceCommand} DeviceCommand */
@@ -24,7 +29,7 @@ let realtimeRefreshTimer = null;
 const realtime = new AlexRealtime({
   onEvent: (event) => {
     const data = event.data;
-    if (activeCommand && data.command_id === activeCommand.id) renderCommandTrace(serverCommandToUi(/** @type {V1Command} */ (/** @type {unknown} */ (data))));
+    if (activeCommand && data.command_id === activeCommand.id) renderCommandTrace(serverCommandToUi(/** @type {V1Command} */(/** @type {unknown} */ (data))));
     if (realtimeRefreshTimer === null) realtimeRefreshTimer = window.setTimeout(() => {
       realtimeRefreshTimer = null;
       void refreshSnapshot();
@@ -33,9 +38,6 @@ const realtime = new AlexRealtime({
 });
 const alexState = createAlexStateMachine();
 const systemReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-const presenceView = createPresenceView();
-const soundEngine = createSoundEngine({ AudioContext: window.AudioContext });
-const STATE_CUES = Object.freeze({ wake: "wake", listening: "listen_open", thinking: "input_accept", acting: "processing_delay", success: "action_success", warning: "warning", critical: "critical", offline: "offline" });
 
 /** @type {AppMode} */
 let appMode = "presence";
@@ -67,6 +69,106 @@ function loadSoundSettings() {
   }
 }
 
+const voicePlayback = new VoicePlayback();
+
+const voiceClient = new VoiceClient({
+  onStateChange: (state) => {
+    /** @type {Record<string, AlexVisualState>} */
+    const stateMap = {
+      idle: "idle",
+      listening: "listening",
+      transcribing: "thinking",
+      thinking: "thinking",
+      acting: "acting",
+      speaking: "speaking",
+      completed: "success",
+      chat_completed: "idle",
+      failed: "warning",
+      cancelled: "idle",
+      unavailable: "offline",
+    };
+    const mapped = stateMap[state] ?? "idle";
+    if (alexState.can(mapped)) setAlexState(mapped);
+  },
+  onTranscript: (transcript) => {
+    if (transcript) {
+      presenceView.showMicroResponse(`"${transcript}"`);
+    }
+  },
+  onAssistantText: (text) => {
+    if (text) {
+      presenceView.showMicroResponse(text);
+      elements.assistantMessage.textContent = text;
+      elements.assistantEvidence.textContent = "EVIDENCE / INTELLIGENCE ROUTER";
+    }
+  },
+  onAudioData: (audioBase64) => {
+    voicePlayback.playAudio(audioBase64).catch((err) => {
+      console.error("Voice playback failed", err);
+      showToast("Không phát được âm thanh phản hồi.", "error");
+    });
+  },
+  onError: (err) => {
+    /** @type {Record<string, string>} */
+    const errorMessages = {
+      microphone_permission_denied: "Quyền microphone bị từ chối.",
+      auth_timeout: "Hết thời gian xác thực giọng nói.",
+      voice_unavailable: "Dịch vụ giọng nói chưa sẵn sàng.",
+      stt_unavailable: "Dịch vụ STT máy chủ chưa sẵn sàng.",
+      brain_unavailable: "ALEX Brain PC chưa kết nối.",
+      brain_timeout: "Hết thời gian xử lý trên máy chủ.",
+      websocket_connection_failed: "Không thể mở kết nối Voice WebSocket.",
+      websocket_error: "Lỗi đường truyền giọng nói.",
+    };
+    const msg = errorMessages[err] ?? `Lỗi giọng nói: ${err}`;
+    showToast(msg, "error");
+    presenceView.showMicroResponse(msg);
+    if (alexState.can("warning")) setAlexState("warning");
+    scheduleIdle();
+  },
+});
+
+const audioRecorder = new AudioRecorder({
+  onChunk: (chunk) => {
+    voiceClient.sendAudioChunk(chunk);
+  },
+});
+
+const presenceView = createPresenceView({
+  /** @param {MediaStream} stream */
+  onMicStart: async (stream) => {
+    if (!api.apiKey) {
+      showToast("Cần xác minh API key trước khi dùng kênh giọng nói.");
+      openAuthDialog();
+      await presenceView.stopMicrophone();
+      return;
+    }
+    try {
+      voicePlayback.stop();
+      void voicePlayback.unlock();
+      if (alexState.can("wake")) setAlexState("wake");
+      await voiceClient.connect(api.apiKey);
+      if (alexState.can("listening")) setAlexState("listening");
+      audioRecorder.start(stream);
+    } catch {
+      await presenceView.stopMicrophone();
+    }
+  },
+  onMicStop: async () => {
+    if (audioRecorder.recording) {
+      // Audio has already been streamed through onChunk.
+      await audioRecorder.stop();
+      if (voiceClient.authenticated) {
+        if (alexState.can("thinking")) setAlexState("thinking");
+        voiceClient.endAudio();
+      }
+    }
+  },
+});
+
+const soundEngine = createSoundEngine({ AudioContext: window.AudioContext });
+const STATE_CUES = Object.freeze({ wake: "wake", listening: "listen_open", thinking: "input_accept", acting: "processing_delay", success: "action_success", warning: "warning", critical: "critical", offline: "offline" });
+
 const presenceCommands = createPresenceCommands({
   visualState: () => alexState.value,
   canTransition: (state) => alexState.can(state),
@@ -78,6 +180,7 @@ const presenceCommands = createPresenceCommands({
   executeRelay: executeRelayCommand,
   executeTestLed: executeTestLedCommand,
   executeMode: executeModeCommand,
+  executeBrainChat,
   scheduleIdle,
   reducedMotion: () => userReducedMotion || systemReducedMotion.matches,
   view: presenceView,
@@ -286,6 +389,7 @@ function applySoundSettings() {
 
 function openCommandWithAudio() {
   void soundEngine.unlock();
+  void voicePlayback.unlock();
   presenceCommands.openCommandEntry();
 }
 
@@ -425,6 +529,45 @@ function beginThinking() {
   if (alexState.value === "idle" && !setAlexState("wake")) return false;
   if (alexState.value === "wake" || alexState.value === "listening") return setAlexState("thinking");
   return alexState.value === "thinking";
+}
+
+/** @param {string} userText */
+async function executeBrainChat(userText) {
+  if (!api.apiKey) {
+    showToast("Cần xác minh API key trước khi gửi câu hỏi.");
+    openAuthDialog();
+    return;
+  }
+  if (!beginThinking()) {
+    showToast("Alex Core đang offline; câu hỏi không được gửi.", "error");
+    return;
+  }
+
+  try {
+    elements.assistantMessage.textContent = `User: "${userText}"`;
+    elements.assistantEvidence.textContent = "EVIDENCE / PENDING ROUTER";
+
+    const response = await api.requestBrainChat(userText);
+
+    if (response.tool_results && response.tool_results.length > 0) {
+      setAlexState("acting");
+      await delay(400);
+    }
+
+    setAlexState("success");
+    const assistantText = response.assistant_text || "ALEX đã xử lý xong yêu cầu.";
+    presenceView.showMicroResponse(assistantText);
+    elements.assistantMessage.textContent = assistantText;
+    elements.assistantEvidence.textContent = `EVIDENCE / ${response.route?.toUpperCase() ?? "INTELLIGENCE ROUTER"}`;
+    showToast("Đã xử lý qua Intelligence Router", "success");
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "Không thể kết nối Intelligence Router";
+    setAlexState("warning");
+    presenceView.showMicroResponse(`Không thể phản hồi: ${reason}`);
+    showToast(reason, "error");
+  }
+  renderActiveWorkspace();
+  scheduleIdle();
 }
 
 /** @param {number} relayId @param {"ON" | "OFF"} action */
@@ -576,7 +719,17 @@ function bindEvents() {
   query("#dismissResponse").addEventListener("click", presenceView.hideMicroResponse);
   query("#dismissContext").addEventListener("click", presenceView.hideContextPanel);
   query("#cancelCommand").addEventListener("click", () => { soundEngine.play("cancel"); presenceCommands.closeCommandEntry(); });
-  elements.microphoneToggle.addEventListener("click", () => { void presenceView.toggleMicrophone(); });
+  elements.microphoneToggle.addEventListener("click", () => {
+    handleMicrophoneOriginPolicy(
+      window.isSecureContext,
+      snapshot?.config?.canonical_origin,
+      {
+        confirm: /** @param {string} msg */ (msg) => window.confirm(msg),
+        navigate: /** @param {string} url */ (url) => { window.location.href = url; },
+        toggle: () => { void presenceView.toggleMicrophone(); }
+      }
+    );
+  });
   query("#refreshButton").addEventListener("click", () => { void refreshSnapshot().then(() => showToast("Đã đồng bộ trạng thái mới nhất.")); });
   query("#openSettings").addEventListener("click", openExperienceDialog);
   query("#roomModeButton").addEventListener("click", () => setWorkspace("scenes"));
@@ -589,7 +742,7 @@ function bindEvents() {
   elements.commandNav.addEventListener("click", (event) => {
     const button = event.target instanceof Element ? event.target.closest("button[data-workspace]") : null;
     const workspace = button instanceof HTMLButtonElement ? button.dataset.workspace : undefined;
-    if (workspace && Object.hasOwn(WORKSPACES, workspace)) setWorkspace(/** @type {keyof typeof WORKSPACES} */ (workspace));
+    if (workspace && Object.hasOwn(WORKSPACES, workspace)) setWorkspace(/** @type {keyof typeof WORKSPACES} */(workspace));
   });
 
   elements.presenceQuality.addEventListener("change", () => applyExperience(normalizeQualityMode(elements.presenceQuality.value), userReducedMotion));
@@ -687,21 +840,21 @@ async function init() {
 
 function exposeDiagnostics() {
   /** @type {Window & {ALEX: unknown}} */ (/** @type {unknown} */ (window)).ALEX = Object.freeze({
-    setAppMode,
-    setWorkspace,
-    setAlexState,
-    processTextCommand: presenceCommands.processTextCommand,
-    get mode() { return appMode; },
-    get visualState() { return alexState.value; },
-    get activeCommand() { return activeCommand; },
-    get diagnostics() {
-      return Object.freeze({
-        ...presenceView.diagnostics,
-        pollActive: pollTimer !== null,
-        destroyed,
-      });
-    },
-  });
+  setAppMode,
+  setWorkspace,
+  setAlexState,
+  processTextCommand: presenceCommands.processTextCommand,
+  get mode() { return appMode; },
+  get visualState() { return alexState.value; },
+  get activeCommand() { return activeCommand; },
+  get diagnostics() {
+    return Object.freeze({
+      ...presenceView.diagnostics,
+      pollActive: pollTimer !== null,
+      destroyed,
+    });
+  },
+});
 }
 
 function destroyRuntime() {

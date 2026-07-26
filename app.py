@@ -10,11 +10,13 @@ import shutil
 import socket
 import subprocess
 import threading
+import time
 import uuid
 from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import Any
 
 import paho.mqtt.client as mqtt
@@ -43,10 +45,42 @@ from alex_brain_missions import StoredSafeMissionExecutor
 from alex_brain_mutations import CommandGatewaySetTestLedExecutor
 from alex_brain_room_mode import AuthoritativeRoomModeExecutor, RoomMode
 from alex_brain_tools import BrainChatRequest
+from alex_command_verification import command_verification_result
+from alex_brain_context_envelope import (
+    brain_relevant_context_enabled,
+    build_fail_closed_brain_request,
+    build_guarded_brain_request,
+    build_legacy_brain_request,
+)
 from alex_safety import CapabilityRegistry, CommandGateway, GatewayResult, SafetyDecision, SafetyPolicy
 from alex_ota import AlexOtaService
 from alex_version import ALEX_VERSION
 from alex_health_api import read_health_snapshot
+from alex_intelligence_shadow import (
+    IntelligenceShadowResult,
+    intelligence_shadow_enabled,
+    observe_intelligence_shadow,
+    observe_precomputed_intelligence_shadow,
+)
+from alex_intelligence_fast_path import (
+    IntelligenceFastPathResult,
+    evaluate_intelligence_fast_path,
+    intelligence_fast_path_enabled,
+    intelligence_action_fast_path_enabled,
+)
+from alex_intelligence_router import IntelligenceRouter, RouterExecutionError
+from alex_intelligence_runtime import (
+    BRAIN_UNAVAILABLE_TEXT,
+    RuntimeOutcome,
+)
+from alex_intent_planner import plan_intelligence
+from alex_brain_resilience_runtime import (
+    BrainRequestLease,
+    LiveBrainCircuitBreaker,
+    brain_circuit_breaker_enabled,
+)
+from alex_knowledge import build_system_knowledge_snapshot
+from alex_knowledge_contracts import SystemKnowledgeSnapshot
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -89,6 +123,19 @@ BRAIN_MAC = os.getenv("ALEX_BRAIN_MAC")
 BRAIN_HOST = os.getenv("ALEX_BRAIN_HOST")
 BRAIN_PORT = int(os.getenv("ALEX_BRAIN_PORT", "22"))
 CORE_BRAIN_CONFIG = CoreBrainConfig.from_env(os.environ)
+ALEX_INTELLIGENCE_SHADOW_ENABLED = intelligence_shadow_enabled(os.environ)
+ALEX_INTELLIGENCE_FAST_PATH_ENABLED = intelligence_fast_path_enabled(
+    os.environ
+)
+ALEX_INTELLIGENCE_ACTION_FAST_PATH_ENABLED = intelligence_action_fast_path_enabled(
+    os.environ
+)
+ALEX_BRAIN_CIRCUIT_BREAKER_ENABLED = brain_circuit_breaker_enabled(
+    os.environ
+)
+ALEX_BRAIN_RELEVANT_CONTEXT_ENABLED = brain_relevant_context_enabled(
+    os.environ
+)
 
 DEVICE_ID = "esp01"
 TOPIC_PREFIX = f"alex/device/{DEVICE_ID}"
@@ -345,7 +392,7 @@ def _publish_ota_command(topic: str, payload: str | dict, qos: int, retain: bool
         return simulator.publish(topic, payload, qos, retain)
     if not mqtt_connected.is_set():
         return False
-    
+
     if isinstance(payload, dict):
         payload_str = json.dumps(payload)
     else:
@@ -393,6 +440,9 @@ def _with_command_verification(command: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         **command,
+        "command_verification": (
+            command_verification_result(command).to_compact_dict()
+        ),
         "verification": {
             "node": node_summary,
             "capability": capability_truth,
@@ -524,16 +574,16 @@ async def lifespan(app: FastAPI):
     add_event("system", "Alex Core khởi động", "success")
     mqtt_client.connect_async(MQTT_HOST, MQTT_PORT, keepalive=30)
     mqtt_client.loop_start()
-    
+
     def _on_hub_event(event: dict[str, Any]) -> None:
         if event.get("type") not in {"heartbeat", "node_online"}:
             return
         if event.get("source") == "simulated" and not ALEX_SIMULATOR:
             return
         ota_service.evaluate_ota_completion(event.get("data", {}))
-        
+
     realtime_hub.add_listener(_on_hub_event)
-    
+
     command_service.start()
     automation_scheduler.start()
     if ALEX_SIMULATOR:
@@ -617,9 +667,69 @@ def verify_auth(_: None = Depends(require_api_key)) -> dict[str, bool]:
     return {"ok": True}
 
 
+def normalize_canonical_origin(raw: str) -> str:
+    raw = raw.strip()
+    if not raw:
+        return ""
+
+    parsed = urlparse(raw)
+    if (
+        parsed.scheme == "https"
+        and parsed.netloc
+        and "@" not in parsed.netloc
+        and (not parsed.path or parsed.path == "/")
+        and not parsed.query
+        and not parsed.fragment
+    ):
+        return f"https://{parsed.netloc}"
+
+    return ""
+
+_cached_canonical_origin: str | None = None
+
+def resolve_canonical_origin() -> str:
+    global _cached_canonical_origin
+    if _cached_canonical_origin is not None:
+        return _cached_canonical_origin
+
+    # 1. Check environment variable first
+    raw_origin = os.environ.get("ALEX_CANONICAL_ORIGIN", "").strip()
+    if raw_origin:
+        _cached_canonical_origin = normalize_canonical_origin(raw_origin)
+        return _cached_canonical_origin
+
+    # 2. Fallback to tailscale status --json
+    try:
+        result = subprocess.run(
+            ["tailscale", "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=True
+        )
+        data = json.loads(result.stdout)
+
+        if isinstance(data, dict):
+            self_node = data.get("Self")
+            if isinstance(self_node, dict):
+                dns_name = self_node.get("DNSName")
+                if isinstance(dns_name, str):
+                    dns_name = dns_name.strip()
+                    if dns_name:
+                        dns_name = dns_name.removesuffix(".")
+                        _cached_canonical_origin = normalize_canonical_origin(f"https://{dns_name}")
+                        return _cached_canonical_origin
+    except (subprocess.SubprocessError, json.JSONDecodeError, OSError, ValueError):
+        pass
+
+    _cached_canonical_origin = ""
+    return _cached_canonical_origin
+
 @app.get("/api/config")
 def get_config() -> dict[str, Any]:
-    return load_config()
+    config = load_config()
+    config["canonical_origin"] = resolve_canonical_origin()
+    return config
 
 
 @app.put("/api/config")
@@ -756,19 +866,19 @@ def delete_domain_record(
 def get_firmware(node_id: str, version: str, token: str):
     if not ota_service.validate_download_token(node_id, version, token):
         raise HTTPException(status_code=403, detail="Invalid or expired download token")
-    
+
     firmware_path = ALEX_FIRMWARE_DIR / node_id / version / "firmware.bin"
     try:
         if not firmware_path.resolve().is_relative_to(ALEX_FIRMWARE_DIR.resolve()):
             raise HTTPException(status_code=403, detail="Invalid path")
     except AttributeError:
         pass
-        
+
     if not firmware_path.exists() or not firmware_path.is_file():
         raise HTTPException(status_code=404, detail="Firmware binary not found")
-        
+
     return FileResponse(
-        firmware_path, 
+        firmware_path,
         media_type="application/octet-stream",
         filename=f"{node_id}-{version}.bin"
     )
@@ -779,7 +889,7 @@ def get_ota_info(node_id: str, _: None = Depends(require_api_key)) -> dict[str, 
     v1 = command_service.device()
     if node_id != v1.get("node_id", DEVICE_ID):
         raise HTTPException(status_code=404, detail="Node not found")
-        
+
     installed_version = v1.get("firmware")
     return ota_service.get_ota_info(node_id, installed_version)
 
@@ -789,10 +899,10 @@ def request_ota(node_id: str, payload: OtaRequest, _: None = Depends(require_api
     v1 = command_service.device()
     if node_id != v1.get("node_id", DEVICE_ID):
         raise HTTPException(status_code=404, detail="Node not found")
-        
+
     if v1.get("connection") != "online":
         raise HTTPException(status_code=400, detail="Thiết bị đang offline")
-        
+
     installed_version = v1.get("firmware")
     try:
         return ota_service.request_ota(node_id, payload.version, installed_version)
@@ -939,6 +1049,108 @@ def _authoritative_device_list() -> dict[str, Any]:
     return {"items": [v1_device], "simulator": ALEX_SIMULATOR}
 
 
+def _build_intelligence_shadow_snapshot(
+    *,
+    captured_at: str,
+) -> SystemKnowledgeSnapshot:
+    """Read existing Core truth only; this creates no new authority or cache."""
+
+    health_report = read_health_snapshot(ALEX_HEALTH_REPORT_PATH)
+    brain_status = brain_service.status()
+    devices = _authoritative_device_list()["items"]
+    with state_lock:
+        room_mode = device_state["mode"]
+    return build_system_knowledge_snapshot(
+        captured_at=captured_at,
+        version=ALEX_VERSION,
+        health_report=health_report,
+        services={
+            "core": {
+                "status": "online",
+                "available": True,
+                "source": "core_runtime",
+            },
+            "brain": {
+                "status": brain_status.get("state"),
+                "observed_at": (
+                    brain_status.get("confirmed_at")
+                    or brain_status.get("requested_at")
+                ),
+                "source": "core_runtime",
+            },
+        },
+        devices=devices,
+        runtime={
+            "room_mode": room_mode,
+            "simulator": ALEX_SIMULATOR,
+            "source": "core_runtime",
+        },
+    )
+
+
+def _observe_intelligence_shadow(
+    payload: BrainChatRequest,
+) -> IntelligenceShadowResult:
+    captured_at = utc_now_iso()
+    return observe_intelligence_shadow(
+        enabled=ALEX_INTELLIGENCE_SHADOW_ENABLED,
+        user_text=payload.user_text,
+        snapshot_factory=lambda: _build_intelligence_shadow_snapshot(
+            captured_at=captured_at,
+        ),
+        now_monotonic=time.monotonic(),
+    )
+
+
+def _evaluate_intelligence_fast_path(
+    payload: BrainChatRequest,
+) -> IntelligenceFastPathResult:
+    captured_at = utc_now_iso()
+    return evaluate_intelligence_fast_path(
+        enabled=ALEX_INTELLIGENCE_FAST_PATH_ENABLED or ALEX_INTELLIGENCE_ACTION_FAST_PATH_ENABLED,
+        user_text=payload.user_text,
+        snapshot_factory=lambda: _build_intelligence_shadow_snapshot(
+            captured_at=captured_at,
+        ),
+        now_monotonic=time.monotonic(),
+        action_fast_path_enabled=ALEX_INTELLIGENCE_ACTION_FAST_PATH_ENABLED,
+    )
+
+
+def _build_core_brain_request(
+    payload: BrainChatRequest,
+    fast_path_result: IntelligenceFastPathResult | None,
+) -> BrainChatRequest:
+    legacy_request = build_legacy_brain_request(payload)
+    if not ALEX_BRAIN_RELEVANT_CONTEXT_ENABLED:
+        return build_fail_closed_brain_request(legacy_request)
+
+    try:
+        plan = (
+            fast_path_result.decision.plan
+            if (
+                isinstance(
+                    fast_path_result,
+                    IntelligenceFastPathResult,
+                )
+                and fast_path_result.decision is not None
+            )
+            else plan_intelligence(payload.user_text)
+        )
+        snapshot = _build_intelligence_shadow_snapshot(
+            captured_at=utc_now_iso(),
+        )
+        return build_guarded_brain_request(
+            request=legacy_request,
+            plan=plan,
+            snapshot=snapshot,
+        )
+    except Exception:
+        # Enhanced mode may lose context, but it must never regain the full
+        # canonical tool catalog after a planner/context/narrowing failure.
+        return build_fail_closed_brain_request(legacy_request)
+
+
 core_brain_mission_executor = StoredSafeMissionExecutor(
     store,
     mission_executor,
@@ -963,7 +1175,121 @@ core_brain_integration = CoreBrainIntegration(
     safe_automation_executor=core_brain_automation_executor,
     room_mode_executor=core_brain_room_mode_executor,
 )
+# Production currently uses one uvicorn worker. This owner is intentionally
+# process-local, starts CLOSED, and is never persisted to SQLite.
+brain_circuit_breaker = LiveBrainCircuitBreaker()
 
+
+def _brain_unavailable_chat_response(
+    payload: BrainChatRequest,
+) -> CoreBrainChatResponse:
+    return CoreBrainChatResponse(
+        request_id=payload.request_id,
+        assistant_text=BRAIN_UNAVAILABLE_TEXT,
+        proposed_tool_calls=[],
+        tool_results=[],
+    )
+
+
+def _core_brain_chat_with_live_breaker(
+    payload: BrainChatRequest,
+) -> CoreBrainChatResponse:
+    if not ALEX_BRAIN_CIRCUIT_BREAKER_ENABLED:
+        return core_brain_integration.chat(payload)
+
+    try:
+        permission = brain_circuit_breaker.before_request()
+    except Exception:
+        # Breaker infrastructure must not become a new availability dependency.
+        return core_brain_integration.chat(payload)
+    if not permission.decision.allowed:
+        return _brain_unavailable_chat_response(payload)
+
+    lease = permission.lease
+    assert isinstance(lease, BrainRequestLease)
+    try:
+        response = core_brain_integration.chat(payload)
+    except BrainClientError as error:
+        try:
+            brain_circuit_breaker.record_failure_code(
+                lease,
+                error.code,
+                http_status=error.http_status,
+            )
+        except Exception:
+            pass
+        raise
+    except BaseException:
+        try:
+            brain_circuit_breaker.abandon(lease)
+        except Exception:
+            pass
+        raise
+    try:
+        brain_circuit_breaker.record_success(lease)
+    except Exception:
+        pass
+    return response
+
+
+def _router_shadow_observer(
+    payload: BrainChatRequest,
+    fast_path_result: IntelligenceFastPathResult | None,
+) -> None:
+    if fast_path_result:
+        observe_precomputed_intelligence_shadow(
+            enabled=True,
+            decision=fast_path_result.decision,
+        )
+    else:
+        _observe_intelligence_shadow(payload)
+
+import sys
+
+def _get_telemetry_logger() -> logging.Logger:
+    import logging
+    logger = logging.getLogger("alex.intelligence.telemetry")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    has_stderr = False
+    for handler in logger.handlers:
+        if isinstance(handler, logging.StreamHandler) and getattr(handler, "stream", None) is sys.stderr:
+            has_stderr = True
+            break
+
+    if not has_stderr:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(handler)
+    return logger
+
+_TELEMETRY_LOGGER = _get_telemetry_logger()
+
+def _route_observation_sink(obs: "IntelligenceRouteObservation") -> None:
+    # Emits structured runtime log best-effort. Does not call store.add_audit().
+    import json
+    payload = json.dumps(
+        obs.to_compact_dict(),
+        ensure_ascii=False,
+        separators=(",", ":")
+    )
+    _TELEMETRY_LOGGER.info(f"Intelligence route observation {payload}")
+
+
+intelligence_router = IntelligenceRouter(
+    core_brain_integration=core_brain_integration,
+    fast_path_evaluator=lambda p: _evaluate_intelligence_fast_path(p),
+    shadow_observer=lambda p, r: _router_shadow_observer(p, r),
+    brain_request_builder=lambda p, r: _build_core_brain_request(p, r),
+    brain_chat_executor=lambda r: _core_brain_chat_with_live_breaker(r),
+    fast_path_enabled=lambda: ALEX_INTELLIGENCE_FAST_PATH_ENABLED,
+    action_fast_path_enabled=lambda: ALEX_INTELLIGENCE_ACTION_FAST_PATH_ENABLED,
+    shadow_enabled=lambda: ALEX_INTELLIGENCE_SHADOW_ENABLED,
+    audit_logger=lambda ev, level, dt: _audit_core_brain(ev, level, dt),
+    route_observation_sink=_route_observation_sink,
+    brain_stream_executor=core_brain_integration.chat_stream,
+)
 
 @app.post("/api/v1/commands")
 def v1_command(
@@ -981,6 +1307,14 @@ def v1_command(
     except RuntimeError as error:
         if str(error) == "esp01_offline":
             raise HTTPException(status_code=409, detail="ESP01 chưa ONLINE; command không được gửi") from error
+        if str(error) == "test_led_command_in_progress":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "ESP01 test_led đang có command chờ xác minh; "
+                    "command mới không được gửi"
+                ),
+            ) from error
         raise
     response = _gateway_response_or_denied(result)
     command = response.get("command")
@@ -1071,13 +1405,22 @@ def v1_brain() -> dict[str, Any]:
     return brain_service.status()
 
 
-@app.post("/api/v1/brain/chat", response_model=CoreBrainChatResponse)
+@app.post(
+    "/api/v1/brain/chat",
+    response_model=CoreBrainChatResponse,
+    response_model_exclude_none=True,
+)
 def v1_brain_chat(
     payload: BrainChatRequest,
     _: None = Depends(require_api_key),
 ) -> CoreBrainChatResponse:
     try:
-        return core_brain_integration.chat(payload)
+        return intelligence_router.dispatch(payload)
+    except RouterExecutionError:
+        raise HTTPException(
+            status_code=500,
+            detail="Deterministic execution failed",
+        ) from None
     except BrainClientError as error:
         status_codes = {
             "brain_disabled": 503,
@@ -1085,6 +1428,10 @@ def v1_brain_chat(
             "brain_unavailable": 503,
             "brain_timeout": 504,
             "invalid_brain_response": 502,
+            "brain_busy": 503,
+            "empty_generation": 502,
+            "invalid_generation": 502,
+            "provider_error": 502,
         }
         raise HTTPException(
             status_code=status_codes.get(error.code, 503),
@@ -1185,3 +1532,39 @@ def v1_domain(domain: str) -> dict[str, Any]:
     if domain not in allowed:
         raise HTTPException(status_code=404, detail="Domain không tồn tại")
     return {"items": store.records(domain), "source": "local_software"}
+
+# --- Voice Integration ---
+from alex_stt import BrainSTTProvider, DeterministicSTTProvider
+from alex_tts import BrainTTSProvider, DeterministicTTSProvider
+
+if CORE_BRAIN_CONFIG.enabled and CORE_BRAIN_CONFIG.configured:
+    voice_stt = BrainSTTProvider(core_brain_client)
+    voice_tts = BrainTTSProvider(core_brain_client)
+else:
+    voice_stt = DeterministicSTTProvider()
+    voice_tts = DeterministicTTSProvider()
+
+from unittest.mock import Mock
+voice_playback = Mock()
+
+import hmac
+
+def _validate_alex_api_key(key: str) -> bool:
+    return hmac.compare_digest(key, ALEX_API_KEY)
+
+from alex_voice_transport import BoundedAudioTransport
+bounded_audio_transport = BoundedAudioTransport(
+    stt_provider=voice_stt,
+    router_dispatch=intelligence_router.dispatch_with_stream,
+    tts_provider=voice_tts,
+    playback_sink=voice_playback,
+    auth_validator=_validate_alex_api_key
+)
+
+from fastapi import WebSocket
+
+@app.websocket("/api/v1/voice/stream")
+async def v1_voice_stream(websocket: WebSocket, session_id: str, request_id: str):
+    """Authenticated endpoint for audio streaming."""
+    # Auth is handled securely inside BoundedAudioTransport via first-message protocol
+    await bounded_audio_transport.handle_websocket(websocket, session_id, request_id)

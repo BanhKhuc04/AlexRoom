@@ -31,6 +31,8 @@ class Esp01Simulator:
         self.scenario = scenario if scenario in self.VALID_SCENARIOS else "normal"
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._timer_lock = threading.Lock()
+        self._timers: set[threading.Timer] = set()
         self._recent: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._state = False
         self.execution_count = 0
@@ -45,6 +47,16 @@ class Esp01Simulator:
         self._stop.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2)
+        with self._timer_lock:
+            timers = tuple(self._timers)
+        for timer in timers:
+            timer.cancel()
+        current = threading.current_thread()
+        for timer in timers:
+            if timer is not current and timer.is_alive():
+                timer.join(timeout=2)
+        with self._timer_lock:
+            self._timers.difference_update(timers)
 
     def set_scenario(self, scenario: str) -> None:
         if scenario not in self.VALID_SCENARIOS:
@@ -60,8 +72,38 @@ class Esp01Simulator:
         except json.JSONDecodeError:
             return False
         delay = 1.2 if self.scenario == "high_latency" else 0.35 if self.scenario == "delayed_ack" else 0.03
-        threading.Timer(delay, self._handle, args=(command,)).start()
+        self._schedule(delay, self._handle, command)
         return True
+
+    def _schedule(
+        self,
+        delay: float,
+        callback: Callable[..., object],
+        *args: object,
+    ) -> None:
+        timer = threading.Timer(
+            delay,
+            self._run_timer,
+            args=(callback, args),
+        )
+        with self._timer_lock:
+            if self._stop.is_set():
+                return
+            self._timers.add(timer)
+        timer.start()
+
+    def _run_timer(
+        self,
+        callback: Callable[..., object],
+        args: tuple[object, ...],
+    ) -> None:
+        try:
+            if not self._stop.is_set():
+                callback(*args)
+        finally:
+            current = threading.current_thread()
+            with self._timer_lock:
+                self._timers.discard(current)
 
     def _handle(self, command: dict[str, Any]) -> None:
         command_id = str(command.get("commandId", ""))
@@ -90,9 +132,18 @@ class Esp01Simulator:
         while len(self._recent) > 12:
             self._recent.popitem(last=False)
         report_delay = 1.0 if self.scenario == "high_latency" else 0.04
-        threading.Timer(report_delay, self.on_reported, args=(reported, "simulated")).start()
+        self._schedule(
+            report_delay,
+            self.on_reported,
+            reported,
+            "simulated",
+        )
         if self.scenario == "duplicate_message":
-            threading.Timer(report_delay + 0.02, self._handle, args=(command,)).start()
+            self._schedule(
+                report_delay + 0.02,
+                self._handle,
+                command,
+            )
 
     def _heartbeat(self) -> None:
         if self.scenario == "offline":
@@ -106,4 +157,3 @@ class Esp01Simulator:
     def _heartbeat_loop(self) -> None:
         while not self._stop.wait(5):
             self._heartbeat()
-

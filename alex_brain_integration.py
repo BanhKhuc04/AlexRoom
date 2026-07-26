@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Final, Literal, Protocol
+from typing import Final, Literal, Protocol, Iterator
 
 from pydantic import Field, ValidationError, model_validator
 
@@ -78,9 +78,12 @@ CoreToolResultReason = Literal[
     "batch_rejected_in_c6a",
     "tool_not_enabled_in_c6b",
     "batch_rejected_in_c6b",
+    "tool_not_allowed_by_request",
+    "batch_rejected_by_request",
     "authoritative_read_failed",
     "safety_gateway_denied",
     "device_unavailable",
+    "command_in_progress",
     "command_not_created",
     "command_lifecycle_failed",
     "mutation_execution_failed",
@@ -140,10 +143,13 @@ class CoreBrainChatResponse(StrictContractModel):
         default_factory=list,
         max_length=MAX_TOOL_CALLS,
     )
+    route: str | None = None
+    brain_called: bool | None = None
 
 
 class BrainProposalClient(Protocol):
     def chat(self, request: BrainChatRequest) -> BrainChatResponse: ...
+    def chat_stream(self, request: BrainChatRequest) -> Iterator[dict]: ...
 
 
 AuditWriter = Callable[[str, str, dict[str, object]], None]
@@ -235,6 +241,56 @@ class CoreBrainIntegration:
             )
             raise BrainClientError("invalid_brain_response") from None
 
+        return self._process_validated_response(request, response)
+
+    def chat_stream(self, request: BrainChatRequest) -> Iterator[dict]:
+        self._audit(
+            "request_accepted_stream",
+            "info",
+            {"request_id": request.request_id},
+        )
+        try:
+            yield from self._client.chat_stream(request)
+        except BrainClientError as error:
+            self._audit(
+                "request_failed_stream",
+                "warning",
+                {"request_id": request.request_id, "reason": error.code},
+            )
+            raise
+
+    def chat_deterministic(
+        self,
+        request_id: str,
+        user_text: str,
+        tool_call: BrainToolCall,
+        assistant_text: str,
+    ) -> CoreBrainChatResponse:
+        self._audit(
+            "request_accepted",
+            "info",
+            {"request_id": request_id},
+        )
+        request = BrainChatRequest(
+            request_id=request_id,
+            user_text=user_text,
+            allowed_tools=[tool_call.name],
+        )
+        response = BrainChatResponse(
+            request_id=request_id,
+            assistant_text=assistant_text,
+            tool_calls=[tool_call],
+        )
+        core_response = self._process_validated_response(request, response)
+        core_response.route = "deterministic_safe_action"
+        core_response.brain_called = False
+        return core_response
+
+    def _process_validated_response(
+        self,
+        request: BrainChatRequest,
+        response: BrainChatResponse,
+    ) -> CoreBrainChatResponse:
         tool_names = [call.name for call in response.tool_calls]
         self._audit(
             "response_received",
@@ -245,6 +301,44 @@ class CoreBrainIntegration:
                 "tool_count": len(tool_names),
             },
         )
+
+        if request.allowed_tools is not None:
+            narrowed_disallowed = [
+                call
+                for call in response.tool_calls
+                if call.name not in request.allowed_tools
+            ]
+            if narrowed_disallowed:
+                self._audit(
+                    "narrowed_policy_rejected",
+                    "warning",
+                    {
+                        "request_id": request.request_id,
+                        "tool_names": tool_names,
+                        "rejected_tool_names": [
+                            call.name
+                            for call in narrowed_disallowed
+                        ],
+                        "reason": "tool_not_allowed_by_request",
+                    },
+                )
+                return CoreBrainChatResponse(
+                    request_id=response.request_id,
+                    assistant_text=response.assistant_text,
+                    proposed_tool_calls=response.tool_calls,
+                    tool_results=[
+                        CoreBrainToolResult(
+                            name=call.name,
+                            status="rejected",
+                            reason=(
+                                "tool_not_allowed_by_request"
+                                if call.name not in request.allowed_tools
+                                else "batch_rejected_by_request"
+                            ),
+                        )
+                        for call in response.tool_calls
+                    ],
+                )
 
         disallowed = [
             call for call in response.tool_calls

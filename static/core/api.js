@@ -56,6 +56,13 @@ export class AlexApi {
         throw error;
       }
       return await response.json();
+    } catch (err) {
+      if (err instanceof Error && (err.name === "AbortError" || controller.signal.aborted)) {
+        const timeoutError = new Error("Brain phản hồi quá thời gian cho phép.");
+        Object.assign(timeoutError, { status: 504, detail: "timeout" });
+        throw timeoutError;
+      }
+      throw err;
     } finally {
       window.clearTimeout(timeout);
     }
@@ -81,7 +88,7 @@ export class AlexApi {
       this.request("/api/events"),
       this.request("/api/v1/devices"),
       this.request("/api/v1/commands?limit=1"),
-      this.request("/api/v1/ota/esp01").catch(() => null),
+      this.apiKey ? this.request("/api/v1/ota/esp01").catch(() => null) : Promise.resolve(null),
     ]);
 
     return {
@@ -276,5 +283,22 @@ export class AlexApi {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ body: definition })
     }));
+  }
+
+  /**
+   * Send natural language text to IntelligenceRouter via Core /api/v1/brain/chat.
+   * @param {string} userText
+   * @param {string} [requestId]
+   * @returns {Promise<import("./domain").BrainChatResponse>}
+   */
+  async requestBrainChat(userText, requestId = `req-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, timeoutMs = 30000) {
+    return /** @type {Promise<import("./domain").BrainChatResponse>} */ (this.request("/api/v1/brain/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request_id: requestId,
+        user_text: userText,
+      }),
+    }, timeoutMs));
   }
 }

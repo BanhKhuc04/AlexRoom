@@ -71,7 +71,7 @@ class BrainServiceHttpTests(unittest.TestCase):
             json_body=VALID_REQUEST,
         )
         self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.json()["error"]["code"], "provider_not_configured")
+        self.assertEqual(response.json()["error"]["code"], "provider_error")
         self.assertEqual(response.json()["error"]["request_id"], "req-c2-1")
 
     def test_secret_comparison_uses_constant_time_primitive(self) -> None:
@@ -161,7 +161,7 @@ class BrainServiceHttpTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 503)
         payload = response.json()
-        self.assertEqual(payload["error"]["code"], "provider_not_configured")
+        self.assertEqual(payload["error"]["code"], "provider_error")
         self.assertNotIn("assistant_text", payload)
         self.assertNotIn("tool_calls", payload)
         self.assertNotIn("success", response.text.lower())
@@ -194,9 +194,53 @@ class BrainServiceHttpTests(unittest.TestCase):
             )
         log_output = "\n".join(captured.output)
         self.assertIn("request_id=req-log", log_output)
-        self.assertIn("outcome=provider_not_configured", log_output)
+        self.assertIn("outcome=provider_error", log_output)
         self.assertNotIn(prompt, log_output)
         self.assertNotIn(TEST_API_KEY, log_output)
+
+    def test_readiness_available_during_held_inference(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        # We need a provider that blocks
+        from unittest.mock import patch
+
+        with patch("brain_service.service.BrainInferenceService.chat") as mock_chat:
+            import threading
+            in_chat = threading.Event()
+            release_chat = threading.Event()
+
+            def blocking_chat(*args, **kwargs):
+                in_chat.set()
+                release_chat.wait(5.0)
+                from alex_brain_tools import BrainChatResponse
+                return BrainChatResponse(request_id="dummy", assistant_text="held", tool_calls=[])
+
+            mock_chat.side_effect = blocking_chat
+
+            try:
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    # Start chat
+                    chat_future = executor.submit(
+                        self.client.post,
+                        "/v1/chat",
+                        headers=self.auth_headers,
+                        json_body=VALID_REQUEST
+                    )
+
+                    # Wait until chat is inside the mock
+                    self.assertTrue(in_chat.wait(1.0))
+
+                    # Check readiness
+                    ready_future = executor.submit(self.client.get, "/ready")
+                    # This timeout acts as a deadlock guard; if it blocks on chat, it will timeout
+                    response = ready_future.result(timeout=2.0)
+
+                    self.assertEqual(response.status_code, 200)
+
+            finally:
+                release_chat.set()
+                if 'chat_future' in locals():
+                    chat_future.result(timeout=1.0)
 
 
 class BrainServiceArchitectureTests(unittest.TestCase):
