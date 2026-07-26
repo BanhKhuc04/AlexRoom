@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+
 import re
+import threading
 from typing import Literal
 
 from pydantic import Field, ValidationError
@@ -21,6 +23,7 @@ from brain_service.provider import (
     BrainTextProvider,
     DisabledProvider,
     InvalidProviderResponseError,
+    EmptyGenerationError,
     ProviderNotConfiguredError,
     ProviderReply,
     ProviderTimeoutError,
@@ -75,6 +78,10 @@ class BrainErrorResponse(StrictContractModel):
     error: BrainErrorDetail
 
 
+class InferenceBusyError(RuntimeError):
+    pass
+
+
 class BrainInferenceService:
     """C3 text-inference boundary that validates proposals and never executes them."""
 
@@ -88,6 +95,8 @@ class BrainInferenceService:
             "not_supported",
         ] = "not_started"
         self._warmup_reason: str | None = None
+        self._inference_lock = threading.Lock()
+
 
     def health(self) -> BrainHealthResponse:
         return BrainHealthResponse(
@@ -146,20 +155,26 @@ class BrainInferenceService:
         )
 
     def chat(self, request: BrainChatRequest) -> BrainChatResponse:
-        allowed_tools = request.allowed_tools
-        generation_budget = 48 if getattr(request, "mode", None) == "exact_mutation" else None
-        reply = self.provider.infer(
-            system_instruction=_system_instruction(request),
-            user_text=request.user_text,
-            tools=brain_tool_schemas_for_provider(allowed_tools),
-            generation_budget=generation_budget,
-        )
-        response = self._validated_response(
-            request.request_id,
-            reply,
-            allowed_tools=allowed_tools,
-        )
-        return apply_forbidden_action_refusal(request, response)
+        if not self._inference_lock.acquire(blocking=False):
+            raise InferenceBusyError("brain_busy")
+        try:
+            allowed_tools = request.allowed_tools
+            generation_budget = 48 if getattr(request, "mode", None) == "exact_mutation" else None
+            reply = self.provider.infer(
+                system_instruction=_system_instruction(request),
+                user_text=request.user_text,
+                tools=brain_tool_schemas_for_provider(allowed_tools),
+                generation_budget=generation_budget,
+            )
+            response = self._validated_response(
+                request.request_id,
+                reply,
+                allowed_tools=allowed_tools,
+            )
+            return apply_forbidden_action_refusal(request, response)
+        finally:
+            self._inference_lock.release()
+
 
     @property
     def provider_name(self) -> str:
@@ -176,6 +191,8 @@ class BrainInferenceService:
             raise InvalidProviderResponseError("invalid_provider_response")
         if not isinstance(reply.tool_calls, (list, tuple)):
             raise InvalidProviderResponseError("invalid_provider_response")
+        if not reply.assistant_text.strip() and not reply.tool_calls:
+            raise EmptyGenerationError("empty_generation")
         if len(reply.tool_calls) > MAX_TOOL_CALLS:
             raise InvalidProviderResponseError("invalid_provider_response")
 

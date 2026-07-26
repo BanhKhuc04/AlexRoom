@@ -379,14 +379,14 @@ class OllamaNativeErrorAndArchitectureTests(unittest.TestCase):
             },
         )
 
-    def test_timeout_maps_to_provider_timeout(self) -> None:
+    def test_timeout_maps_to_brain_timeout(self) -> None:
         response = self.post(
             self.client_with_transport_error(
                 ProviderTimeoutError("raw timeout detail")
             )
         )
         self.assertEqual(response.status_code, 504)
-        self.assertEqual(response.json()["error"]["code"], "provider_timeout")
+        self.assertEqual(response.json()["error"]["code"], "brain_timeout")
         self.assertNotIn("raw timeout detail", response.text)
 
     def test_connection_failure_maps_to_provider_unavailable(self) -> None:
@@ -398,7 +398,7 @@ class OllamaNativeErrorAndArchitectureTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(
             response.json()["error"]["code"],
-            "provider_unavailable",
+            "provider_error",
         )
         self.assertNotIn("connection detail", response.text)
 

@@ -1366,6 +1366,10 @@ def v1_brain_chat(
             "brain_unavailable": 503,
             "brain_timeout": 504,
             "invalid_brain_response": 502,
+            "brain_busy": 503,
+            "empty_generation": 502,
+            "invalid_generation": 502,
+            "provider_error": 502,
         }
         raise HTTPException(
             status_code=status_codes.get(error.code, 503),

@@ -313,7 +313,7 @@ class BrainProviderServiceTests(unittest.TestCase):
             json_body=self.request().model_dump(),
         )
         self.assertEqual(response.status_code, 504)
-        self.assertEqual(response.json()["error"]["code"], "provider_timeout")
+        self.assertEqual(response.json()["error"]["code"], "brain_timeout")
         self.assertNotIn("secret timeout detail", response.text)
 
     def test_provider_network_failure_maps_to_bounded_503(self) -> None:
@@ -327,7 +327,7 @@ class BrainProviderServiceTests(unittest.TestCase):
             json_body=self.request().model_dump(),
         )
         self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.json()["error"]["code"], "provider_unavailable")
+        self.assertEqual(response.json()["error"]["code"], "provider_error")
         self.assertNotIn(secret_body, response.text)
 
     def test_invalid_provider_response_maps_to_bounded_502(self) -> None:
@@ -342,7 +342,7 @@ class BrainProviderServiceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 502)
         self.assertEqual(
             response.json()["error"]["code"],
-            "invalid_provider_response",
+            "invalid_generation",
         )
         self.assertNotIn("relay_1", response.text)
 

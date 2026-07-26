@@ -25,6 +25,10 @@ BrainClientErrorCode = Literal[
     "brain_unavailable",
     "brain_timeout",
     "invalid_brain_response",
+    "brain_busy",
+    "invalid_generation",
+    "empty_generation",
+    "provider_error",
 ]
 
 
@@ -181,15 +185,26 @@ class CoreBrainClient:
             ) as upstream:
                 body = upstream.read(MAX_BRAIN_RESPONSE_BYTES + 1)
         except HTTPError as error:
+            code = "brain_unavailable"
             if error.code in {408, 504}:
-                raise BrainClientError(
-                    "brain_timeout",
-                    http_status=error.code,
-                ) from None
-            raise BrainClientError(
-                "brain_unavailable",
-                http_status=error.code,
-            ) from None
+                code = "brain_timeout"
+            else:
+                try:
+                    error_body = error.read(MAX_BRAIN_RESPONSE_BYTES + 1)
+                    if len(error_body) <= MAX_BRAIN_RESPONSE_BYTES:
+                        parsed = json.loads(error_body.decode("utf-8"))
+                        err_detail = parsed.get("error", {})
+                        returned_code = err_detail.get("code")
+                        if returned_code in {
+                            "brain_busy",
+                            "provider_error",
+                            "invalid_generation",
+                            "empty_generation",
+                        }:
+                            code = returned_code
+                except Exception:
+                    pass
+            raise BrainClientError(code, http_status=error.code) from None
         except (socket.timeout, TimeoutError):
             raise BrainClientError("brain_timeout") from None
         except URLError as error:

@@ -25,6 +25,7 @@ from brain_service.provider import (
     ProviderNotConfiguredError,
     ProviderTimeoutError,
     ProviderUnavailableError,
+    EmptyGenerationError,
 )
 from brain_service.providers import build_provider
 from brain_service.service import (
@@ -33,6 +34,7 @@ from brain_service.service import (
     BrainHealthResponse,
     BrainInferenceService,
     BrainReadinessResponse,
+    InferenceBusyError,
 )
 
 
@@ -257,53 +259,85 @@ def create_app(
         except ProviderNotConfiguredError as error:
             _log_outcome(
                 "/v1/chat",
-                "provider_not_configured",
+                "provider_error",
                 payload.request_id,
                 provider=service.provider_name,
+                latency_ms=round((time.monotonic() - started) * 1000),
             )
             raise BrainHttpError(
                 503,
-                "provider_not_configured",
+                "provider_error",
                 "No Brain inference provider is configured.",
                 payload.request_id,
             ) from error
         except ProviderTimeoutError as error:
             _log_outcome(
                 "/v1/chat",
-                "provider_timeout",
+                "brain_timeout",
                 payload.request_id,
                 provider=service.provider_name,
+                latency_ms=round((time.monotonic() - started) * 1000),
             )
             raise BrainHttpError(
                 504,
-                "provider_timeout",
+                "brain_timeout",
                 "The Brain inference provider timed out.",
                 payload.request_id,
             ) from error
         except ProviderUnavailableError as error:
             _log_outcome(
                 "/v1/chat",
-                "provider_unavailable",
+                "provider_error",
                 payload.request_id,
                 provider=service.provider_name,
+                latency_ms=round((time.monotonic() - started) * 1000),
             )
             raise BrainHttpError(
                 503,
-                "provider_unavailable",
+                "provider_error",
                 "The Brain inference provider is unavailable.",
                 payload.request_id,
             ) from error
         except InvalidProviderResponseError as error:
             _log_outcome(
                 "/v1/chat",
-                "invalid_provider_response",
+                "invalid_generation",
                 payload.request_id,
                 provider=service.provider_name,
+                latency_ms=round((time.monotonic() - started) * 1000),
             )
             raise BrainHttpError(
                 502,
-                "invalid_provider_response",
+                "invalid_generation",
                 "The inference provider returned an invalid response.",
+                payload.request_id,
+            ) from error
+        except InferenceBusyError as error:
+            _log_outcome(
+                "/v1/chat",
+                "brain_busy",
+                payload.request_id,
+                provider=service.provider_name,
+                latency_ms=round((time.monotonic() - started) * 1000),
+            )
+            raise BrainHttpError(
+                503,
+                "brain_busy",
+                "The Brain inference service is busy.",
+                payload.request_id,
+            ) from error
+        except EmptyGenerationError as error:
+            _log_outcome(
+                "/v1/chat",
+                "empty_generation",
+                payload.request_id,
+                provider=service.provider_name,
+                latency_ms=round((time.monotonic() - started) * 1000),
+            )
+            raise BrainHttpError(
+                502,
+                "empty_generation",
+                "The Brain inference provider returned an empty generation.",
                 payload.request_id,
             ) from error
         latency_ms = round((time.monotonic() - started) * 1000)

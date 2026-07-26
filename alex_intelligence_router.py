@@ -199,7 +199,15 @@ class IntelligenceRouter:
             obs_state.route_outcome = RuntimeOutcome.CALL_BRAIN.value
             obs_state.brain_called = True
             obs_state.success = False
-            if error.code in {"brain_timeout", "brain_unavailable", "invalid_brain_response"}:
+            if error.code in {
+                "brain_timeout",
+                "brain_unavailable",
+                "invalid_brain_response",
+                "brain_busy",
+                "empty_generation",
+                "invalid_generation",
+                "provider_error",
+            }:
                 obs_state.error_code = error.code
             else:
                 obs_state.error_code = "brain_client_error"

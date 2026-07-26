@@ -43,6 +43,10 @@ class InvalidProviderResponseError(RuntimeError):
     pass
 
 
+class EmptyGenerationError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderToolProposal:
     name: object

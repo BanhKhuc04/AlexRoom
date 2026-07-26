@@ -228,7 +228,7 @@ class BoundedAudioTransport:
             router = RouterAdapter()
             router._dispatch = self.router_dispatch
             
-            response = process_voice_transcript(session, voice_input, router)
+            response = await asyncio.to_thread(process_voice_transcript, session, voice_input, router)
             
             if response.state == VoiceSessionState.FAILED:
                 if not websocket.client_state.name == "DISCONNECTED":
