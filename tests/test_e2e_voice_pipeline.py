@@ -105,12 +105,10 @@ def test_no_speech_bypasses_router_and_tts():
 
         router_dispatch.assert_not_called()
         tts_provider.synthesize.assert_not_called()
+        playback_sink.play.assert_not_called()
 
-        ws.send_json.assert_any_call({
-            "type": "no_speech",
-            "session_id": "s1",
-            "request_id": "r1"
-        })
+        emitted_types = [call[1][0].get("type") for call in ws.send_json.mock_calls]
+        assert emitted_types == ["auth_ok", "transcribing", "no_speech"]
     asyncio.run(run())
 
 

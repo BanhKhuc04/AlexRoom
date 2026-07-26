@@ -90,7 +90,8 @@ class VoiceSessionLifecycle:
         VoiceSessionState.TRANSCRIBING: {
             VoiceSessionState.THINKING,
             VoiceSessionState.CANCELLED,
-            VoiceSessionState.FAILED
+            VoiceSessionState.FAILED,
+            VoiceSessionState.COMPLETED
         },
         VoiceSessionState.THINKING: {
             VoiceSessionState.ACTING,
