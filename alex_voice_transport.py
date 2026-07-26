@@ -282,16 +282,31 @@ class BoundedAudioTransport:
                 "request_id": request_id
             })
 
+            loop = asyncio.get_running_loop()
+            stream_queue: asyncio.Queue[str | None] = asyncio.Queue()
+
             def text_delta_callback(delta: str) -> None:
-                asyncio.run_coroutine_threadsafe(
-                    channel.send_json({
-                        "type": "text_delta",
-                        "session_id": session_id,
-                        "request_id": request_id,
-                        "delta": delta
-                    }),
-                    asyncio.get_running_loop()
-                )
+                loop.call_soon_threadsafe(stream_queue.put_nowait, delta)
+
+            async def stream_consumer() -> None:
+                while True:
+                    delta = await stream_queue.get()
+                    if delta is None:
+                        stream_queue.task_done()
+                        break
+                    try:
+                        await channel.send_json({
+                            "type": "text_delta",
+                            "session_id": session_id,
+                            "request_id": request_id,
+                            "delta": delta
+                        })
+                    except Exception:
+                        pass
+                    finally:
+                        stream_queue.task_done()
+
+            consumer_task = asyncio.create_task(stream_consumer())
 
             class RouterAdapter:
                 def dispatch(self, req):
@@ -310,13 +325,22 @@ class BoundedAudioTransport:
             )
 
             try:
-                response = await router_task
+                # Wait for the router task to finish
+                response = await asyncio.shield(router_task)
+                router_task = None  # Completed successfully
+                
+                # Signal consumer to exit and wait for it
+                stream_queue.put_nowait(None)
+                await consumer_task
             except asyncio.CancelledError:
-                session.cancel()
-                await channel.close()
-                return
-
-            router_task = None  # Completed successfully
+                if router_task and not router_task.done():
+                    router_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await router_task
+                
+                stream_queue.put_nowait(None)
+                await consumer_task
+                raise
 
             if response.state == VoiceSessionState.FAILED:
                 await channel.send_json({
