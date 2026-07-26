@@ -82,6 +82,7 @@ const voiceClient = new VoiceClient({
       acting: "acting",
       speaking: "speaking",
       completed: "success",
+      chat_completed: "idle",
       failed: "warning",
       cancelled: "idle",
       unavailable: "offline",

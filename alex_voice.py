@@ -233,7 +233,10 @@ def process_voice_transcript(
                 assistant_text=None,
                 state=session.state,
                 error_code="empty_response",
-                metadata={"route": response.route or "unknown"}
+                metadata={
+                    "route": response.route or "unknown",
+                "is_action": is_action,
+                }
             )
 
         if session.state == VoiceSessionState.CANCELLED:
@@ -262,7 +265,10 @@ def process_voice_transcript(
             assistant_text=response.assistant_text,
             state=session.state,
             error_code=None,
-            metadata={"route": response.route or "unknown"}
+            metadata={
+                "route": response.route or "unknown",
+                "is_action": is_action,
+            }
         )
 
     except BrainClientError as e:

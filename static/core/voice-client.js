@@ -114,8 +114,13 @@ export class VoiceClient {
     }
 
     if (msg.state) {
-      this.state = msg.state;
-      this.callbacks.onStateChange?.(msg.state, msg);
+      const nextState =
+        msg.type === "completed" && msg.is_action === false
+          ? "chat_completed"
+          : msg.state;
+
+      this.state = nextState;
+      this.callbacks.onStateChange?.(nextState, msg);
     }
 
     if (msg.transcript) {

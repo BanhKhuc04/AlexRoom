@@ -248,7 +248,7 @@ class BoundedAudioTransport:
                     "type": "assistant_text",
                     "session_id": session_id,
                     "request_id": request_id,
-                    "text": response.assistant_text
+                    "assistant_text": response.assistant_text
                 })
 
             # TTS Audio Return Path
@@ -262,6 +262,7 @@ class BoundedAudioTransport:
                         if not websocket.client_state.name == "DISCONNECTED":
                             await websocket.send_json({
                                 "type": "speaking",
+                                "state": session.state.value,
                                 "session_id": session_id,
                                 "request_id": request_id,
                                 "audio_base64": audio_b64,
@@ -294,6 +295,7 @@ class BoundedAudioTransport:
                 await websocket.send_json({
                     "type": "completed",
                     "state": session.state.value,
+                    "is_action": bool(response.metadata.get("is_action", False)),
                     "session_id": session_id,
                     "request_id": request_id,
                     "transcript": stt_result.transcript,
