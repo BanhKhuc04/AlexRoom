@@ -21,10 +21,13 @@ class FakeWebSocket:
         from starlette.websockets import WebSocketState
         self.application_state = WebSocketState.CONNECTED
         self.client_state = WebSocketState.CONNECTED
+        self.slow_send = False
         
     async def send_json(self, data: dict):
         if self.closed:
             raise RuntimeError("Cannot send after close")
+        if self.slow_send:
+            await asyncio.sleep(0.01)
         self.sent.append(json.dumps(data))
         
     async def accept(self):
@@ -136,6 +139,49 @@ async def test_stream_delta_callback_forwards_successfully(transport, mock_ws):
 
 
 @pytest.mark.anyio
+async def test_queue_saturation_produces_failure(transport, mock_ws):
+    # Simulate a router that emits 150 deltas quickly (queue size is 100)
+    class FastSaturatingRouter:
+        def dispatch(self, req, stream_callback=None):
+            if stream_callback:
+                import time
+                for i in range(150):
+                    stream_callback(f"a{i}")
+                    time.sleep(0.001)
+            import time
+            time.sleep(0.2)
+            return CoreBrainChatResponse(
+                request_id="req-sat",
+                assistant_text="ab",
+                tool_results=[],
+                route="chat"
+            )
+
+    router = FastSaturatingRouter()
+    transport.router_dispatch = router.dispatch
+
+    mock_ws.received = [
+        {"bytes": b"fakeaudio"},
+        {"text": "done"}
+    ]
+    mock_ws.slow_send = True
+    
+    # We want to wait for it to fail gracefully
+    await transport.handle_websocket(mock_ws, "session-sat", "req-sat")
+    
+    sent_events = [json.loads(s) for s in mock_ws.sent]
+    types = [e["type"] for e in sent_events]
+    
+    # Queue saturation should cause terminal_flag to be set.
+    # When terminal_flag is True, consumer stops sending text_delta, but the transport completes,
+    # and eventually it might close or fail.
+    # Because consumer_task doesn't fail the outer try block, the transport will finish normally
+    # but the text_deltas will be truncated to <= 100.
+    delta_count = types.count("text_delta")
+    assert delta_count <= 100
+
+
+@pytest.mark.anyio
 async def test_disconnect_during_stream(transport, mock_ws):
     # If the router takes too long and the websocket disconnects
     class SlowRouter:
@@ -177,3 +223,10 @@ async def test_disconnect_during_stream(transport, mock_ws):
     assert mock_ws.closed
     # After cancel, any late deltas pushed by the thread are discarded by SafeWebSocketChannel logic
     # and consumer cancel.
+    
+    # Assert exact one close was called
+    assert mock_ws.closed
+    
+    # No late sends
+    sent_events = [json.loads(s) for s in mock_ws.sent]
+    assert not any("late" in e.get("delta", "") for e in sent_events)

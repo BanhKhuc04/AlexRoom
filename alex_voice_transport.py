@@ -2,7 +2,9 @@ import asyncio
 import logging
 import json
 import base64
-from typing import Any, Callable, Optional
+import time
+import contextlib
+from typing import Any, Callable, Optional, cast
 
 from fastapi import WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
@@ -283,10 +285,20 @@ class BoundedAudioTransport:
             })
 
             loop = asyncio.get_running_loop()
-            stream_queue: asyncio.Queue[str | None] = asyncio.Queue()
+            stream_queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=100)
+            terminal_flag = [False]
 
             def text_delta_callback(delta: str) -> None:
-                loop.call_soon_threadsafe(stream_queue.put_nowait, delta)
+                def _enqueue_delta() -> None:
+                    if terminal_flag[0]:
+                        return
+                    try:
+                        stream_queue.put_nowait(delta)
+                    except asyncio.QueueFull:
+                        terminal_flag[0] = True
+                        logger.error(f"Voice stream queue saturated for {session_id}")
+
+                loop.call_soon_threadsafe(_enqueue_delta)
 
             async def stream_consumer() -> None:
                 while True:
@@ -294,15 +306,22 @@ class BoundedAudioTransport:
                     if delta is None:
                         stream_queue.task_done()
                         break
+                    
+                    if terminal_flag[0]:
+                        stream_queue.task_done()
+                        continue
+                        
                     try:
-                        await channel.send_json({
+                        success = await channel.send_json({
                             "type": "text_delta",
                             "session_id": session_id,
                             "request_id": request_id,
                             "delta": delta
                         })
+                        if not success:
+                            terminal_flag[0] = True
                     except Exception:
-                        pass
+                        terminal_flag[0] = True
                     finally:
                         stream_queue.task_done()
 
@@ -333,13 +352,15 @@ class BoundedAudioTransport:
                 stream_queue.put_nowait(None)
                 await consumer_task
             except asyncio.CancelledError:
+                terminal_flag[0] = True
                 if router_task and not router_task.done():
                     router_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await router_task
                 
-                stream_queue.put_nowait(None)
-                await consumer_task
+                consumer_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await consumer_task
                 raise
 
             if response.state == VoiceSessionState.FAILED:
@@ -410,6 +431,10 @@ class BoundedAudioTransport:
             })
 
         except Exception as e:
+            terminal_flag[0] = True
+            consumer_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await consumer_task
             logger.error(f"Processing error for {session_id}: {e}")
             session.cancel()
             await channel.send_json({
@@ -420,6 +445,7 @@ class BoundedAudioTransport:
                 "detail": str(e)
             })
         finally:
+            terminal_flag[0] = True
             if router_task is not None and not router_task.done():
                 # Cancelling an asyncio.to_thread wrapper DOES NOT prove that the worker thread,
                 # inference, or an already-started Core operation stopped.
@@ -428,9 +454,7 @@ class BoundedAudioTransport:
                 # SafeWebSocketChannel protects socket lifecycle and isolates late results.
                 logger.info(f"Orphaning background inference task for {session_id}")
                 router_task.cancel()
-                try:
-                    await router_task
-                except (asyncio.CancelledError, Exception):
-                    pass
-            # Single owner close — idempotent
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asyncio.shield(router_task)
+            
             await channel.close()
