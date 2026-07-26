@@ -29,7 +29,7 @@ let realtimeRefreshTimer = null;
 const realtime = new AlexRealtime({
   onEvent: (event) => {
     const data = event.data;
-    if (activeCommand && data.command_id === activeCommand.id) renderCommandTrace(serverCommandToUi(/** @type {V1Command} */ (/** @type {unknown} */ (data))));
+    if (activeCommand && data.command_id === activeCommand.id) renderCommandTrace(serverCommandToUi(/** @type {V1Command} */(/** @type {unknown} */ (data))));
     if (realtimeRefreshTimer === null) realtimeRefreshTimer = window.setTimeout(() => {
       realtimeRefreshTimer = null;
       void refreshSnapshot();
@@ -103,7 +103,10 @@ const voiceClient = new VoiceClient({
     }
   },
   onAudioData: (audioBase64) => {
-    void voicePlayback.playAudio(audioBase64);
+    voicePlayback.playAudio(audioBase64).catch((err) => {
+      console.error("Voice playback failed", err);
+      showToast("Không phát được âm thanh phản hồi.", "error");
+    });
   },
   onError: (err) => {
     /** @type {Record<string, string>} */
@@ -142,6 +145,7 @@ const presenceView = createPresenceView({
     }
     try {
       voicePlayback.stop();
+      void voicePlayback.unlock();
       if (alexState.can("wake")) setAlexState("wake");
       await voiceClient.connect(api.apiKey);
       if (alexState.can("listening")) setAlexState("listening");
@@ -385,6 +389,7 @@ function applySoundSettings() {
 
 function openCommandWithAudio() {
   void soundEngine.unlock();
+  void voicePlayback.unlock();
   presenceCommands.openCommandEntry();
 }
 
@@ -737,7 +742,7 @@ function bindEvents() {
   elements.commandNav.addEventListener("click", (event) => {
     const button = event.target instanceof Element ? event.target.closest("button[data-workspace]") : null;
     const workspace = button instanceof HTMLButtonElement ? button.dataset.workspace : undefined;
-    if (workspace && Object.hasOwn(WORKSPACES, workspace)) setWorkspace(/** @type {keyof typeof WORKSPACES} */ (workspace));
+    if (workspace && Object.hasOwn(WORKSPACES, workspace)) setWorkspace(/** @type {keyof typeof WORKSPACES} */(workspace));
   });
 
   elements.presenceQuality.addEventListener("change", () => applyExperience(normalizeQualityMode(elements.presenceQuality.value), userReducedMotion));
@@ -835,21 +840,21 @@ async function init() {
 
 function exposeDiagnostics() {
   /** @type {Window & {ALEX: unknown}} */ (/** @type {unknown} */ (window)).ALEX = Object.freeze({
-    setAppMode,
-    setWorkspace,
-    setAlexState,
-    processTextCommand: presenceCommands.processTextCommand,
-    get mode() { return appMode; },
-    get visualState() { return alexState.value; },
-    get activeCommand() { return activeCommand; },
-    get diagnostics() {
-      return Object.freeze({
-        ...presenceView.diagnostics,
-        pollActive: pollTimer !== null,
-        destroyed,
-      });
-    },
-  });
+  setAppMode,
+  setWorkspace,
+  setAlexState,
+  processTextCommand: presenceCommands.processTextCommand,
+  get mode() { return appMode; },
+  get visualState() { return alexState.value; },
+  get activeCommand() { return activeCommand; },
+  get diagnostics() {
+    return Object.freeze({
+      ...presenceView.diagnostics,
+      pollActive: pollTimer !== null,
+      destroyed,
+    });
+  },
+});
 }
 
 function destroyRuntime() {

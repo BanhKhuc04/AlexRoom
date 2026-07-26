@@ -10,6 +10,7 @@ export class VoicePlayback {
     /** @type {AudioBufferSourceNode | null} */
     this.currentSource = null;
     this.isPlaying = false;
+    this._unlocked = false;
     /** @type {Record<string, any>} */
     this.diagnostics = {
       lastDecodeTimeMs: 0,
@@ -24,6 +25,33 @@ export class VoicePlayback {
       playbackStart: null,
       playbackEnd: null,
     };
+  }
+
+  /**
+   * Creates (if needed) and resumes the AudioContext. Call this synchronously-ish
+   * from a real user gesture (mic button, "talk to ALEX" button, etc.) so the
+   * context is already "running" by the time TTS audio actually arrives over the
+   * WebSocket — instead of trying to resume it for the first time inside an async
+   * message handler, which browsers may silently refuse.
+   * @returns {Promise<boolean>} true if the context is unlocked and running.
+   */
+  async unlock() {
+    const AudioContextClass = window.AudioContext || /** @type {typeof AudioContext} */ (Reflect.get(window, "webkitAudioContext"));
+    if (!AudioContextClass) return false;
+    try {
+      if (!this.context || this.context.state === "closed") {
+        this.context = new AudioContextClass();
+      }
+      if (this.context.state === "suspended") {
+        await this.context.resume();
+      }
+      this._unlocked = this.context.state === "running";
+      return this._unlocked;
+    } catch (err) {
+      this._unlocked = false;
+      console.warn("VoicePlayback unlock failed", err);
+      return false;
+    }
   }
 
   /**
@@ -55,19 +83,17 @@ export class VoicePlayback {
       this.diagnostics.isWave = view.getUint32(8, false) === 0x57415645;
     }
 
-    const AudioContextClass = window.AudioContext || /** @type {typeof AudioContext} */ (Reflect.get(window, "webkitAudioContext"));
-    if (!AudioContextClass) return;
-
-    if (!this.context || this.context.state === "closed") {
-      this.context = new AudioContextClass();
-    }
-
-    if (this.context.state === "suspended") {
-      await this.context.resume();
-    }
-
     const startTime = performance.now();
     try {
+      const ok = await this.unlock();
+      if (!ok || !this.context) {
+        this.diagnostics.decodeErrors++;
+        console.warn("VoicePlayback: AudioContext not running, cannot play TTS audio", {
+          contextState: this.context?.state,
+        });
+        return;
+      }
+
       const audioBuffer = await this.context.decodeAudioData(arrayBuffer.slice(0));
       const source = this.context.createBufferSource();
       source.buffer = audioBuffer;
