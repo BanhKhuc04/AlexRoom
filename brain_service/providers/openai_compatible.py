@@ -83,6 +83,25 @@ class UrllibJsonTransport:
             raise InvalidProviderResponseError("invalid_provider_response")
         return decoded
 
+    def _set_socket_timeout(self, response: object, timeout_seconds: float) -> None:
+        sock = None
+        if hasattr(response, "fp"):
+            fp = response.fp
+            if hasattr(fp, "raw") and hasattr(fp.raw, "_sock"):
+                sock = fp.raw._sock
+            elif hasattr(fp, "_sock"):
+                sock = fp._sock
+        if sock is None and hasattr(response, "raw") and hasattr(response.raw, "_sock"):
+            sock = response.raw._sock
+            
+        if sock is None or not hasattr(sock, "settimeout"):
+            raise ProviderUnavailableError("provider_unavailable")
+            
+        try:
+            sock.settimeout(timeout_seconds)
+        except OSError:
+            raise ProviderUnavailableError("provider_unavailable")
+
     def post_json_stream(
         self,
         *,
@@ -110,7 +129,8 @@ class UrllibJsonTransport:
                     if now - start_time > hard_deadline_seconds:
                         raise ProviderTimeoutError("provider_timeout")
                     
-                    response.fp._sock.settimeout(
+                    self._set_socket_timeout(
+                        response,
                         idle_timeout_seconds if first_token_received else first_token_timeout_seconds
                     )
                     

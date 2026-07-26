@@ -409,12 +409,13 @@ def create_app(
                     code,
                     payload.request_id,
                     provider=service.provider_name,
+                    error=str(error)
                 )
                 yield json.dumps({
                     "type": "error",
                     "request_id": payload.request_id,
                     "code": code,
-                    "message": str(error)
+                    "message": code
                 }, ensure_ascii=False) + "\n"
 
         return StreamingResponse(event_generator(), media_type="application/x-ndjson")
