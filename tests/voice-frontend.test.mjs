@@ -65,6 +65,10 @@ test("VoicePlayback manages state and stop cleanly", async () => {
   assert.equal(playback.isPlaying, false);
   playback.stop();
   assert.equal(playback.isPlaying, false);
+  
+  const stats = playback.getDiagnostics();
+  assert.equal(stats.decodeErrors, 0);
+  assert.equal(stats.playCount, 0);
 });
 
 test("Service Worker cache version is updated to phase-1.0-v1", async () => {

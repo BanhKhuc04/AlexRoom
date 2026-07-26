@@ -4,7 +4,7 @@ import json
 import socket
 import urllib.error
 import urllib.request
-from typing import Mapping, Protocol, Sequence
+from typing import Mapping, Protocol, Sequence, Iterator
 
 from brain_service.provider import (
     InvalidProviderResponseError,
@@ -28,6 +28,17 @@ class JsonHttpTransport(Protocol):
         payload: Mapping[str, object],
         timeout_seconds: float,
     ) -> dict[str, object]: ...
+
+    def post_json_stream(
+        self,
+        *,
+        url: str,
+        headers: Mapping[str, str],
+        payload: Mapping[str, object],
+        first_token_timeout_seconds: float,
+        idle_timeout_seconds: float,
+        hard_deadline_seconds: float,
+    ) -> Iterator[str]: ...
 
 
 class UrllibJsonTransport:
@@ -72,6 +83,59 @@ class UrllibJsonTransport:
             raise InvalidProviderResponseError("invalid_provider_response")
         return decoded
 
+    def post_json_stream(
+        self,
+        *,
+        url: str,
+        headers: Mapping[str, str],
+        payload: Mapping[str, object],
+        first_token_timeout_seconds: float,
+        idle_timeout_seconds: float,
+        hard_deadline_seconds: float,
+    ) -> Iterator[str]:
+        import time
+        request = urllib.request.Request(
+            url=url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers=dict(headers),
+            method="POST",
+        )
+        total_read = 0
+        start_time = time.monotonic()
+        first_token_received = False
+        try:
+            with urllib.request.urlopen(request, timeout=first_token_timeout_seconds) as response:
+                while True:
+                    now = time.monotonic()
+                    if now - start_time > hard_deadline_seconds:
+                        raise ProviderTimeoutError("provider_timeout")
+                    
+                    response.fp._sock.settimeout(
+                        idle_timeout_seconds if first_token_received else first_token_timeout_seconds
+                    )
+                    
+                    line = response.readline(65536)
+                    if not line:
+                        break
+                    first_token_received = True
+                    total_read += len(line)
+                    if total_read > MAX_UPSTREAM_RESPONSE_BYTES:
+                        raise InvalidProviderResponseError("invalid_provider_response")
+                    decoded = line.decode("utf-8").strip()
+                    if decoded:
+                        yield decoded
+        except urllib.error.HTTPError as error:
+            error.close()
+            raise ProviderUnavailableError("provider_unavailable") from None
+        except urllib.error.URLError as error:
+            if isinstance(error.reason, (TimeoutError, socket.timeout)):
+                raise ProviderTimeoutError("provider_timeout") from None
+            raise ProviderUnavailableError("provider_unavailable") from None
+        except (TimeoutError, socket.timeout):
+            raise ProviderTimeoutError("provider_timeout") from None
+        except OSError:
+            raise ProviderUnavailableError("provider_unavailable") from None
+
 
 class OpenAICompatibleProvider:
     name = "openai_compatible"
@@ -84,12 +148,18 @@ class OpenAICompatibleProvider:
         model: str | None,
         api_key: str | None,
         timeout_seconds: float,
+        stream_first_token_timeout_seconds: float = 15.0,
+        stream_idle_timeout_seconds: float = 10.0,
+        stream_hard_deadline_seconds: float = 120.0,
         transport: JsonHttpTransport | None = None,
     ) -> None:
         self.url = (url or "").strip()
         self.model = (model or "").strip()
         self.api_key = api_key
         self.timeout_seconds = timeout_seconds
+        self.stream_first_token_timeout_seconds = stream_first_token_timeout_seconds
+        self.stream_idle_timeout_seconds = stream_idle_timeout_seconds
+        self.stream_hard_deadline_seconds = stream_hard_deadline_seconds
         self.transport = transport or UrllibJsonTransport()
         self.configured = bool(self.url and self.model)
 

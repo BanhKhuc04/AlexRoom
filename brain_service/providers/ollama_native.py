@@ -8,7 +8,9 @@ from brain_service.provider import (
     ProviderNotConfiguredError,
     ProviderReply,
     ProviderToolProposal,
+    ProviderStreamEvent,
 )
+from typing import Iterator
 from brain_service.providers.openai_compatible import (
     JsonHttpTransport,
     UrllibJsonTransport,
@@ -32,12 +34,18 @@ class OllamaNativeProvider:
         model: str | None,
         api_key: str | None,
         timeout_seconds: float,
+        stream_first_token_timeout_seconds: float = 15.0,
+        stream_idle_timeout_seconds: float = 10.0,
+        stream_hard_deadline_seconds: float = 120.0,
         transport: JsonHttpTransport | None = None,
     ) -> None:
         self.url = self._chat_url(base_url)
         self.model = (model or "").strip()
         self.api_key = api_key
         self.timeout_seconds = timeout_seconds
+        self.stream_first_token_timeout_seconds = stream_first_token_timeout_seconds
+        self.stream_idle_timeout_seconds = stream_idle_timeout_seconds
+        self.stream_hard_deadline_seconds = stream_hard_deadline_seconds
         self.transport = transport or UrllibJsonTransport()
         self.configured = bool(self.url and self.model)
 
@@ -87,6 +95,62 @@ class OllamaNativeProvider:
             timeout_seconds=self.timeout_seconds,
         )
         return self._parse_response(upstream)
+
+    def infer_stream(
+        self,
+        *,
+        request_id: str,
+        system_instruction: str,
+        user_text: str,
+    ) -> Iterator[ProviderStreamEvent]:
+        if not self.configured:
+            raise ProviderNotConfiguredError("provider_not_configured")
+
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+            
+        payload: dict[str, object] = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": user_text},
+            ],
+            "think": False,
+            "stream": True,
+            "keep_alive": OLLAMA_KEEP_ALIVE,
+            "options": {
+                "temperature": 0,
+                "num_predict": OLLAMA_NUM_PREDICT,
+            },
+        }
+
+        yield ProviderStreamEvent(type="start", request_id=request_id)
+        
+        full_text = ""
+        stream = self.transport.post_json_stream(
+            url=self.url,
+            headers=headers,
+            payload=payload,
+            first_token_timeout_seconds=self.stream_first_token_timeout_seconds,
+            idle_timeout_seconds=self.stream_idle_timeout_seconds,
+            hard_deadline_seconds=self.stream_hard_deadline_seconds,
+        )
+        for line in stream:
+            try:
+                chunk = json.loads(line)
+            except json.JSONDecodeError:
+                raise InvalidProviderResponseError("invalid_provider_response") from None
+                
+            msg = chunk.get("message", {})
+            content = msg.get("content", "")
+            if content:
+                full_text += content
+                yield ProviderStreamEvent(type="text_delta", delta=content, request_id=request_id)
+                
+            if chunk.get("done") is True:
+                yield ProviderStreamEvent(type="final", assistant_text=full_text, request_id=request_id)
+                return
 
     def warmup(
         self,

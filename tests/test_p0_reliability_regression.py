@@ -159,6 +159,7 @@ def test_heavy_dispatch_doesnt_block():
     async def run_test():
         from unittest.mock import Mock, AsyncMock
         from fastapi import WebSocket
+        from starlette.websockets import WebSocketState
         from alex_voice_transport import BoundedAudioTransport
         from alex_stt import STTResult
         from alex_brain_integration import CoreBrainChatResponse
@@ -187,9 +188,8 @@ def test_heavy_dispatch_doesnt_block():
             {"bytes": b"audio_data"},
             {"text": "DONE"}
         ]
-        ws_state = Mock()
-        ws_state.name = "CONNECTED"
-        ws.client_state = ws_state
+        ws.application_state = WebSocketState.CONNECTED
+        ws.client_state = WebSocketState.CONNECTED
 
         dispatch_task = asyncio.create_task(
             transport.handle_websocket(ws, "sess", "req")

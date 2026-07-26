@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, Protocol, Sequence
+from typing import Mapping, Protocol, Sequence, Literal, Iterator
 
 
 SYSTEM_INSTRUCTION = """You are ALEX Brain.
@@ -59,6 +59,46 @@ class ProviderReply:
     tool_calls: object
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderStreamEvent:
+    type: Literal["start", "text_delta", "final", "error"]
+    request_id: str
+    delta: str | None = None
+    assistant_text: str | None = None
+    code: str | None = None
+    message: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.type == "start":
+            if self.delta is not None:
+                raise ValueError("start cannot have delta")
+            if self.assistant_text is not None:
+                raise ValueError("start cannot have assistant_text")
+            if self.code is not None:
+                raise ValueError("start cannot have error_code")
+        elif self.type == "text_delta":
+            if not self.delta:
+                raise ValueError("text_delta requires non-empty delta")
+            if self.assistant_text is not None:
+                raise ValueError("text_delta cannot have assistant_text")
+            if self.code is not None:
+                raise ValueError("text_delta cannot have error_code")
+        elif self.type == "final":
+            if self.assistant_text is None:
+                raise ValueError("final requires assistant_text")
+            if self.delta is not None:
+                raise ValueError("final cannot have delta")
+            if self.code is not None:
+                raise ValueError("final cannot have error_code")
+        elif self.type == "error":
+            if not self.code:
+                raise ValueError("error requires code")
+            if self.delta is not None:
+                raise ValueError("error cannot have delta")
+            if self.assistant_text is not None:
+                raise ValueError("error cannot have assistant_text")
+
+
 class BrainTextProvider(Protocol):
     name: str
     configured: bool
@@ -80,6 +120,16 @@ class BrainTextProvider(Protocol):
         system_instruction: str,
         tools: Sequence[Mapping[str, object]],
     ) -> None: ...
+
+
+class BrainStreamingProvider(BrainTextProvider, Protocol):
+    def infer_stream(
+        self,
+        *,
+        request_id: str,
+        system_instruction: str,
+        user_text: str,
+    ) -> Iterator[ProviderStreamEvent]: ...
 
 
 class DisabledProvider:
@@ -106,4 +156,14 @@ class DisabledProvider:
         tools: Sequence[Mapping[str, object]],
     ) -> None:
         del timeout_seconds, system_instruction, tools
+        raise ProviderNotConfiguredError("provider_not_configured")
+
+    def infer_stream(
+        self,
+        *,
+        request_id: str,
+        system_instruction: str,
+        user_text: str,
+    ) -> Iterator[ProviderStreamEvent]:
+        del request_id, system_instruction, user_text
         raise ProviderNotConfiguredError("provider_not_configured")

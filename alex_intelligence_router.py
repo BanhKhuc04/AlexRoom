@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterator
 
 from alex_brain_client import BrainClientError
 from alex_brain_integration import BrainToolCall, CoreBrainChatResponse, CoreBrainIntegration
@@ -176,6 +176,7 @@ class IntelligenceRouter:
         shadow_enabled: Callable[[], bool],
         audit_logger: Callable[[str, str, dict[str, Any]], None],
         route_observation_sink: Callable[[IntelligenceRouteObservation], None],
+        brain_stream_executor: Callable[[BrainChatRequest], Iterator[dict]] | None = None,
     ):
         self.core_brain_integration = core_brain_integration
         self.fast_path_evaluator = fast_path_evaluator
@@ -187,12 +188,20 @@ class IntelligenceRouter:
         self.shadow_enabled = shadow_enabled
         self.audit_logger = audit_logger
         self.route_observation_sink = route_observation_sink
+        self.brain_stream_executor = brain_stream_executor
         self.metrics = IntelligenceRouterMetrics()
 
     def dispatch(self, payload: BrainChatRequest) -> CoreBrainChatResponse:
+        return self.dispatch_with_stream(payload, None)
+
+    def dispatch_with_stream(
+        self,
+        payload: BrainChatRequest,
+        stream_callback: Callable[[str], None] | None = None,
+    ) -> CoreBrainChatResponse:
         obs_state = _DispatchObservationState(payload.request_id)
         try:
-            response = self._execute_dispatch(payload, obs_state)
+            response = self._execute_dispatch(payload, obs_state, stream_callback)
             obs_state.success = True
             return response
         except BrainClientError as error:
@@ -241,6 +250,7 @@ class IntelligenceRouter:
         self,
         payload: BrainChatRequest,
         obs_state: _DispatchObservationState,
+        stream_callback: Callable[[str], None] | None = None,
     ) -> CoreBrainChatResponse:
         fast_path_result: IntelligenceFastPathResult | None = None
 
@@ -345,7 +355,30 @@ class IntelligenceRouter:
 
         t0_brain = time.monotonic()
         try:
-            return self.brain_chat_executor(brain_request)
+            if (
+                stream_callback
+                and brain_request.allowed_tools is not None
+                and len(brain_request.allowed_tools) == 0
+                and getattr(brain_request, "mode", None) != "exact_mutation"
+                and self.brain_stream_executor
+            ):
+                stream = self.brain_stream_executor(brain_request)
+                full_text = ""
+                for event in stream:
+                    if event.get("type") == "text_delta":
+                        delta = event.get("delta", "")
+                        full_text += delta
+                        stream_callback(delta)
+                    elif event.get("type") == "final":
+                        full_text = event.get("assistant_text", full_text)
+                return CoreBrainChatResponse(
+                    request_id=payload.request_id,
+                    assistant_text=full_text,
+                    proposed_tool_calls=[],
+                    tool_results=[]
+                )
+            else:
+                return self.brain_chat_executor(brain_request)
         finally:
             t1_brain = time.monotonic()
             obs_state.brain_duration_ms = int((t1_brain - t0_brain) * 1000)

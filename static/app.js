@@ -141,6 +141,7 @@ const presenceView = createPresenceView({
       return;
     }
     try {
+      voicePlayback.stop();
       if (alexState.can("wake")) setAlexState("wake");
       await voiceClient.connect(api.apiKey);
       if (alexState.can("listening")) setAlexState("listening");

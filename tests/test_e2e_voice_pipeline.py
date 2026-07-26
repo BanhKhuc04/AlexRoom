@@ -3,12 +3,27 @@ import asyncio
 from unittest.mock import Mock, AsyncMock
 
 from fastapi import WebSocket
+from starlette.websockets import WebSocketState
 
 from alex_stt import STTResult
 from alex_tts import TTSResult
 from alex_voice import VoiceSessionState, VoiceErrorCode
 from alex_voice_transport import BoundedAudioTransport
 from alex_wake_word import DeterministicWakeWordProvider, WakeWordState
+
+
+def _ws_mock(*, connected: bool = True) -> AsyncMock:
+    """Create a properly configured mock WebSocket for SafeWebSocketChannel."""
+    ws = AsyncMock(spec=WebSocket)
+    ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
+    if connected:
+        ws.application_state = WebSocketState.CONNECTED
+        ws.client_state = WebSocketState.CONNECTED
+    else:
+        ws.application_state = WebSocketState.DISCONNECTED
+        ws.client_state = WebSocketState.DISCONNECTED
+    return ws
+
 
 def test_e2e_voice_pipeline():
     async def run():
@@ -44,16 +59,12 @@ def test_e2e_voice_pipeline():
         transport = BoundedAudioTransport(stt_provider, router_dispatch, tts_provider, playback_sink)
 
         # Client connects
-        ws = AsyncMock(spec=WebSocket)
-        ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
+        ws = _ws_mock()
         ws.receive.side_effect = [
             {"bytes": b"fake_audio_chunk_1"},
             {"bytes": b"fake_audio_chunk_2"},
             {"text": "DONE"}
         ]
-        ws_state = Mock()
-        ws_state.name = "CONNECTED"
-        ws.client_state = ws_state
 
         await transport.handle_websocket(ws, "session_1", "req_1")
 
@@ -73,13 +84,14 @@ def test_e2e_voice_pipeline():
         ws.send_json.assert_any_call({
             "type": "completed",
             "state": VoiceSessionState.COMPLETED.value,
+            "is_action": False,
             "session_id": "session_1",
             "request_id": "req_1",
             "transcript": "Bật đèn",
             "assistant_text": "Đã bật đèn.",
             "error_code": None
         })
-        ws.close.assert_awaited_once_with()
+        ws.close.assert_awaited_once_with(code=1000)
 
     asyncio.run(run())
 
@@ -95,12 +107,8 @@ def test_no_speech_bypasses_router_and_tts():
         playback_sink = AsyncMock()
 
         transport = BoundedAudioTransport(stt_provider, router_dispatch, tts_provider, playback_sink)
-        ws = AsyncMock(spec=WebSocket)
-        ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
+        ws = _ws_mock()
         ws.receive.side_effect = [{"bytes": b"audio"}, {"text": "DONE"}]
-        ws_state = Mock()
-        ws_state.name = "CONNECTED"
-        ws.client_state = ws_state
 
         await transport.handle_websocket(ws, "s1", "r1")
 
@@ -110,7 +118,7 @@ def test_no_speech_bypasses_router_and_tts():
 
         emitted_types = [call[1][0].get("type") for call in ws.send_json.mock_calls]
         assert emitted_types == ["auth_ok", "transcribing", "no_speech"]
-        ws.close.assert_awaited_once_with()
+        ws.close.assert_awaited_once_with(code=1000)
     asyncio.run(run())
 
 
@@ -134,12 +142,8 @@ def test_empty_tts_audio_rejected_no_speaking_event():
         playback_sink = AsyncMock()
 
         transport = BoundedAudioTransport(stt_provider, router_dispatch, tts_provider, playback_sink)
-        ws = AsyncMock(spec=WebSocket)
-        ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
+        ws = _ws_mock()
         ws.receive.side_effect = [{"bytes": b"audio"}, {"text": "DONE"}]
-        ws_state = Mock()
-        ws_state.name = "CONNECTED"
-        ws.client_state = ws_state
 
         await transport.handle_websocket(ws, "s1", "r1")
 
@@ -158,12 +162,8 @@ def test_disconnect_releases_resources():
         playback_sink = AsyncMock()
 
         transport = BoundedAudioTransport(stt_provider, router_dispatch, tts_provider, playback_sink)
-        ws = AsyncMock(spec=WebSocket)
-        ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
+        ws = _ws_mock()
         ws.receive.side_effect = [{"text": '{"type": "cancel"}'}]
-        ws_state = Mock()
-        ws_state.name = "CONNECTED"
-        ws.client_state = ws_state
 
         await transport.handle_websocket(ws, "s1", "r1")
 
@@ -178,7 +178,7 @@ def test_disconnect_releases_resources():
             "request_id": "r1",
             "reason": "cancelled"
         })
-        ws.close.assert_called_once()
+        ws.close.assert_awaited_once_with(code=1000)
     asyncio.run(run())
 
 
@@ -204,12 +204,8 @@ def test_tool_only_structured_result_handled():
         playback_sink = AsyncMock()
 
         transport = BoundedAudioTransport(stt_provider, router_dispatch, tts_provider, playback_sink)
-        ws = AsyncMock(spec=WebSocket)
-        ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
+        ws = _ws_mock()
         ws.receive.side_effect = [{"bytes": b"audio"}, {"text": "DONE"}]
-        ws_state = Mock()
-        ws_state.name = "CONNECTED"
-        ws.client_state = ws_state
 
         await transport.handle_websocket(ws, "s1", "r1")
 
@@ -249,12 +245,8 @@ def test_brain_error_codes_clean_exit(error_code):
         playback_sink = AsyncMock()
 
         transport = BoundedAudioTransport(stt_provider, router_dispatch, tts_provider, playback_sink)
-        ws = AsyncMock(spec=WebSocket)
-        ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
+        ws = _ws_mock()
         ws.receive.side_effect = [{"bytes": b"audio"}, {"text": "DONE"}]
-        ws_state = Mock()
-        ws_state.name = "CONNECTED"
-        ws.client_state = ws_state
 
         await transport.handle_websocket(ws, "s1", "r1")
 
@@ -262,7 +254,7 @@ def test_brain_error_codes_clean_exit(error_code):
         for call in ws.send_json.mock_calls:
             assert call[1][0].get("type") != "speaking"
 
-        ws.close.assert_called_once()
+        ws.close.assert_awaited_once_with(code=1000)
 
         ws.send_json.assert_any_call({
             "type": "error",

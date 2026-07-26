@@ -4,7 +4,7 @@ import json
 
 import re
 import threading
-from typing import Literal
+from typing import Literal, Iterator
 
 from pydantic import Field, ValidationError
 
@@ -29,6 +29,8 @@ from brain_service.provider import (
     ProviderTimeoutError,
     ProviderToolProposal,
     ProviderUnavailableError,
+    ProviderStreamEvent,
+    BrainStreamingProvider,
 )
 from brain_service.refusal_policy import apply_forbidden_action_refusal
 
@@ -175,6 +177,36 @@ class BrainInferenceService:
         finally:
             self._inference_lock.release()
 
+    def chat_stream(self, request: BrainChatRequest) -> Iterator[ProviderStreamEvent]:
+        if request.allowed_tools != []:
+            raise ValueError("Streaming only supported for zero-tool requests")
+        if getattr(request, "mode", None) == "exact_mutation":
+            raise ValueError("exact_mutation is not streamable")
+
+        if not self._inference_lock.acquire(blocking=False):
+            raise InferenceBusyError("brain_busy")
+            
+        try:
+            if not hasattr(self.provider, "infer_stream"):
+                raise ProviderUnavailableError("provider_does_not_support_streaming")
+
+            stream = getattr(self.provider, "infer_stream")(
+                request_id=request.request_id,
+                system_instruction=_system_instruction(request),
+                user_text=request.user_text,
+            )
+            
+            full_text = ""
+            for event in stream:
+                if event.type == "final":
+                    full_text = event.assistant_text or ""
+                    if not full_text.strip():
+                        raise EmptyGenerationError("empty_generation")
+                    if UNCONFIRMED_SUCCESS_CLAIM.search(full_text):
+                        raise InvalidProviderResponseError("invalid_provider_response")
+                yield event
+        finally:
+            self._inference_lock.release()
 
     @property
     def provider_name(self) -> str:

@@ -1123,7 +1123,7 @@ def _build_core_brain_request(
 ) -> BrainChatRequest:
     legacy_request = build_legacy_brain_request(payload)
     if not ALEX_BRAIN_RELEVANT_CONTEXT_ENABLED:
-        return legacy_request
+        return build_fail_closed_brain_request(legacy_request)
 
     try:
         plan = (
@@ -1288,6 +1288,7 @@ intelligence_router = IntelligenceRouter(
     shadow_enabled=lambda: ALEX_INTELLIGENCE_SHADOW_ENABLED,
     audit_logger=lambda ev, level, dt: _audit_core_brain(ev, level, dt),
     route_observation_sink=_route_observation_sink,
+    brain_stream_executor=core_brain_integration.chat_stream,
 )
 
 @app.post("/api/v1/commands")
@@ -1554,7 +1555,7 @@ def _validate_alex_api_key(key: str) -> bool:
 from alex_voice_transport import BoundedAudioTransport
 bounded_audio_transport = BoundedAudioTransport(
     stt_provider=voice_stt,
-    router_dispatch=intelligence_router.dispatch,
+    router_dispatch=intelligence_router.dispatch_with_stream,
     tts_provider=voice_tts,
     playback_sink=voice_playback,
     auth_validator=_validate_alex_api_key

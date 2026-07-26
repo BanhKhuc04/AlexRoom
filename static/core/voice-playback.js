@@ -10,6 +10,20 @@ export class VoicePlayback {
     /** @type {AudioBufferSourceNode | null} */
     this.currentSource = null;
     this.isPlaying = false;
+    /** @type {Record<string, any>} */
+    this.diagnostics = {
+      lastDecodeTimeMs: 0,
+      lastDurationSec: 0,
+      lastSampleRate: 0,
+      decodeErrors: 0,
+      playCount: 0,
+      decodedBytes: 0,
+      isRiff: false,
+      isWave: false,
+      channels: 0,
+      playbackStart: null,
+      playbackEnd: null,
+    };
   }
 
   /**
@@ -34,6 +48,13 @@ export class VoicePlayback {
       arrayBuffer = audioData;
     }
 
+    this.diagnostics.decodedBytes = arrayBuffer.byteLength;
+    if (arrayBuffer.byteLength >= 12) {
+      const view = new DataView(arrayBuffer);
+      this.diagnostics.isRiff = view.getUint32(0, false) === 0x52494646;
+      this.diagnostics.isWave = view.getUint32(8, false) === 0x57415645;
+    }
+
     const AudioContextClass = window.AudioContext || /** @type {typeof AudioContext} */ (Reflect.get(window, "webkitAudioContext"));
     if (!AudioContextClass) return;
 
@@ -45,6 +66,7 @@ export class VoicePlayback {
       await this.context.resume();
     }
 
+    const startTime = performance.now();
     try {
       const audioBuffer = await this.context.decodeAudioData(arrayBuffer.slice(0));
       const source = this.context.createBufferSource();
@@ -54,9 +76,18 @@ export class VoicePlayback {
       this.currentSource = source;
       this.isPlaying = true;
 
+      this.diagnostics.lastDecodeTimeMs = performance.now() - startTime;
+      this.diagnostics.lastDurationSec = audioBuffer.duration;
+      this.diagnostics.lastSampleRate = audioBuffer.sampleRate;
+      this.diagnostics.channels = audioBuffer.numberOfChannels;
+      this.diagnostics.playCount++;
+      this.diagnostics.playbackStart = Date.now();
+      this.diagnostics.playbackEnd = null;
+
       return new Promise((resolve) => {
         source.onended = () => {
           this.isPlaying = false;
+          this.diagnostics.playbackEnd = Date.now();
           if (this.currentSource === source) {
             this.currentSource = null;
           }
@@ -66,8 +97,17 @@ export class VoicePlayback {
       });
     } catch (err) {
       this.isPlaying = false;
+      this.diagnostics.decodeErrors++;
       console.warn("TTS Audio Decode Error", err);
     }
+  }
+
+  /**
+   * Returns current diagnostic metrics.
+   * @returns {Record<string, any>}
+   */
+  getDiagnostics() {
+    return { ...this.diagnostics, contextState: this.context?.state || "none" };
   }
 
   /**

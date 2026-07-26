@@ -85,4 +85,5 @@ def build_legacy_brain_request(
     return BrainChatRequest(
         request_id=request.request_id,
         user_text=request.user_text,
+        allowed_tools=None,
     )

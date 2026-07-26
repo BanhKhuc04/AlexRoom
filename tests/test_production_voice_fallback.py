@@ -2,6 +2,7 @@ import asyncio
 import pytest
 from unittest.mock import Mock, AsyncMock
 from fastapi import WebSocket
+from starlette.websockets import WebSocketState
 
 from alex_brain_client import CoreBrainClient, BrainClientError
 from alex_stt import BrainSTTProvider, STTError, STTErrorCode
@@ -28,9 +29,8 @@ def test_brain_stt_unavailable_no_fake_transcript():
         ws = AsyncMock(spec=WebSocket)
         ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
         ws.receive.side_effect = [{"bytes": b"\x00\x00" * 160}, {"text": "DONE"}]
-        ws_state = Mock()
-        ws_state.name = "CONNECTED"
-        ws.client_state = ws_state
+        ws.application_state = WebSocketState.CONNECTED
+        ws.client_state = WebSocketState.CONNECTED
 
         await transport.handle_websocket(ws, "s-prod-1", "r-prod-1")
 
@@ -85,9 +85,8 @@ def test_brain_tts_unavailable_preserves_text_no_fake_audio():
         ws = AsyncMock(spec=WebSocket)
         ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
         ws.receive.side_effect = [{"bytes": b"\x00\x00" * 160}, {"text": "DONE"}]
-        ws_state = Mock()
-        ws_state.name = "CONNECTED"
-        ws.client_state = ws_state
+        ws.application_state = WebSocketState.CONNECTED
+        ws.client_state = WebSocketState.CONNECTED
 
         await transport.handle_websocket(ws, "s-prod-2", "r-prod-2")
 
@@ -96,7 +95,7 @@ def test_brain_tts_unavailable_preserves_text_no_fake_audio():
             "type": "assistant_text",
             "session_id": "s-prod-2",
             "request_id": "r-prod-2",
-            "text": "Đã bật đèn."
+            "assistant_text": "Đã bật đèn."
         })
         # Soft error for TTS delivered, no fake speaking audio event sent
         ws.send_json.assert_any_call({

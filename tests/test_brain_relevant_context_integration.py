@@ -794,7 +794,7 @@ def test_flag_off_preserves_legacy_core_to_brain_request_and_response() -> None:
     assert response.status_code == 200
     assert service.calls == 1
     assert service.requests[0].context is None
-    assert service.requests[0].allowed_tools is None
+    assert service.requests[0].allowed_tools == []
     assert set(response.json()) == {
         "request_id",
         "assistant_text",

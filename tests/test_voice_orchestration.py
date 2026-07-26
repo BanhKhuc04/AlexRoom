@@ -3,6 +3,7 @@ import asyncio
 from unittest.mock import Mock, AsyncMock
 
 from fastapi import WebSocket
+from starlette.websockets import WebSocketState
 
 from alex_stt import STTResult
 from alex_tts import TTSResult
@@ -38,9 +39,8 @@ def test_bare_in_orchestration_pipeline_success():
             {"bytes": b"audio_data"},
             {"text": "DONE"}
         ]
-        ws_state = Mock()
-        ws_state.name = "CONNECTED"
-        ws.client_state = ws_state
+        ws.application_state = WebSocketState.CONNECTED
+        ws.client_state = WebSocketState.CONNECTED
         
         await transport.handle_websocket(ws, "s1", "r1")
         
@@ -53,6 +53,7 @@ def test_bare_in_orchestration_pipeline_success():
         ws.send_json.assert_any_call({
             "type": "completed",
             "state": VoiceSessionState.COMPLETED.value,
+            "is_action": False,
             "session_id": "s1",
             "request_id": "r1",
             "transcript": "Bật đèn",
@@ -86,9 +87,8 @@ def test_bare_in_orchestration_pipeline_no_text():
             {"bytes": b"audio_data"},
             {"text": "DONE"}
         ]
-        ws_state = Mock()
-        ws_state.name = "CONNECTED"
-        ws.client_state = ws_state
+        ws.application_state = WebSocketState.CONNECTED
+        ws.client_state = WebSocketState.CONNECTED
         
         await transport.handle_websocket(ws, "s1", "r1")
         

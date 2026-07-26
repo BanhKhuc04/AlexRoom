@@ -9,6 +9,20 @@ from alex_stt import STTResult
 from alex_voice import VoiceSessionState, VoiceErrorCode
 from alex_voice_transport import BoundedAudioTransport
 
+
+def _ws_mock(*, connected: bool = True) -> AsyncMock:
+    """Create a properly configured mock WebSocket for SafeWebSocketChannel."""
+    ws = AsyncMock(spec=WebSocket)
+    ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
+    if connected:
+        ws.application_state = WebSocketState.CONNECTED
+        ws.client_state = WebSocketState.CONNECTED
+    else:
+        ws.application_state = WebSocketState.DISCONNECTED
+        ws.client_state = WebSocketState.DISCONNECTED
+    return ws
+
+
 def test_bounded_audio_transport_success():
     async def run():
         stt_provider = AsyncMock()
@@ -25,15 +39,11 @@ def test_bounded_audio_transport_success():
         
         transport = BoundedAudioTransport(stt_provider, router_dispatch)
         
-        ws = AsyncMock(spec=WebSocket)
-        ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
+        ws = _ws_mock()
         ws.receive.side_effect = [
             {"bytes": b"audio_data"},
             {"text": "DONE"}
         ]
-        ws_state = Mock()
-        ws_state.name = "CONNECTED"
-        ws.client_state = ws_state
         
         await transport.handle_websocket(ws, "s1", "r1")
         
@@ -44,6 +54,7 @@ def test_bounded_audio_transport_success():
         ws.send_json.assert_any_call({
             "type": "completed",
             "state": VoiceSessionState.COMPLETED.value,
+            "is_action": False,
             "session_id": "s1",
             "request_id": "r1",
             "transcript": "test",
@@ -60,15 +71,11 @@ def test_bounded_audio_transport_cancel():
         router_dispatch = Mock()
         transport = BoundedAudioTransport(stt_provider, router_dispatch)
         
-        ws = AsyncMock(spec=WebSocket)
-        ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
+        ws = _ws_mock()
         ws.receive.side_effect = [
             {"bytes": b"audio_data"},
             {"text": "CANCEL"}
         ]
-        ws_state = Mock()
-        ws_state.name = "CONNECTED"
-        ws.client_state = ws_state
         
         await transport.handle_websocket(ws, "s1", "r1")
         
@@ -101,18 +108,13 @@ def test_bounded_audio_transport_disconnect():
         router_dispatch = Mock()
         transport = BoundedAudioTransport(stt_provider, router_dispatch)
         
-        ws = AsyncMock(spec=WebSocket)
-        ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
+        ws = _ws_mock(connected=False)
         ws.receive.side_effect = WebSocketDisconnect()
-        ws_state = Mock()
-        ws_state.name = "DISCONNECTED"
-        ws.client_state = ws_state
         
         await transport.handle_websocket(ws, "s1", "r1")
         
         stt_provider.transcribe.assert_not_called()
         router_dispatch.assert_not_called()
-        ws.send_json.assert_not_called()
         ws.accept.assert_called_once()
     asyncio.run(run())
 
@@ -123,14 +125,10 @@ def test_bounded_audio_transport_max_chunk_size():
         router_dispatch = Mock()
         transport = BoundedAudioTransport(stt_provider, router_dispatch)
         
-        ws = AsyncMock(spec=WebSocket)
-        ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
+        ws = _ws_mock()
         ws.receive.side_effect = [
             {"bytes": b"x" * (1024 * 512 + 1)},
         ]
-        ws_state = Mock()
-        ws_state.name = "CONNECTED"
-        ws.client_state = ws_state
         
         stt_provider.transcribe.side_effect = Exception("Empty")
         

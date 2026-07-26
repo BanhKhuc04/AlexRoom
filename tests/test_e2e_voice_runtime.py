@@ -7,6 +7,7 @@ import json
 import pytest
 from unittest.mock import Mock, AsyncMock
 from fastapi import WebSocket
+from starlette.websockets import WebSocketState
 
 from app import app, ALEX_API_KEY
 from _brain_service_test_client import AsgiTestClient
@@ -98,9 +99,8 @@ def test_e2e_voice_transport_lifecycle():
             {"bytes": b"\x00\x00" * 160}, # 16kHz PCM LE chunk
             {"text": "DONE"}
         ]
-        ws_state = Mock()
-        ws_state.name = "CONNECTED"
-        ws.client_state = ws_state
+        ws.application_state = WebSocketState.CONNECTED
+        ws.client_state = WebSocketState.CONNECTED
 
         await transport.handle_websocket(ws, "s-e2e-1", "r-e2e-1")
 
@@ -108,13 +108,14 @@ def test_e2e_voice_transport_lifecycle():
         ws.send_json.assert_any_call({
             "type": "completed",
             "state": VoiceSessionState.COMPLETED.value,
+            "is_action": False,
             "session_id": "s-e2e-1",
             "request_id": "r-e2e-1",
             "transcript": "bật test led",
             "assistant_text": "Đã bật test led.",
             "error_code": None
         })
-        ws.close.assert_called_once()
+        ws.close.assert_called_once_with(code=1000)
 
     asyncio.run(run())
 
@@ -136,9 +137,8 @@ def test_e2e_voice_transport_barge_in():
         ws.receive.side_effect = [
             {"text": "CANCEL"}
         ]
-        ws_state = Mock()
-        ws_state.name = "CONNECTED"
-        ws.client_state = ws_state
+        ws.application_state = WebSocketState.CONNECTED
+        ws.client_state = WebSocketState.CONNECTED
 
         await transport.handle_websocket(ws, "s-cancel-1", "r-cancel-1")
 
@@ -149,6 +149,6 @@ def test_e2e_voice_transport_barge_in():
             "request_id": "r-cancel-1",
             "reason": "cancelled"
         })
-        ws.close.assert_called_once()
+        ws.close.assert_called_once_with(code=1000)
 
     asyncio.run(run())

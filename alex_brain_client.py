@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import socket
+from typing import Iterator
 from dataclasses import dataclass
 from typing import Callable, Final, Literal, Mapping, Protocol
 from urllib.error import HTTPError, URLError
@@ -19,6 +20,9 @@ MIN_BRAIN_TIMEOUT_SECONDS: Final = 0.1
 MAX_BRAIN_TIMEOUT_SECONDS: Final = 30.0
 MAX_BRAIN_RESPONSE_BYTES: Final = 256 * 1024
 MAX_BRAIN_TTS_RESPONSE_BYTES: Final = 8 * 1024 * 1024
+DEFAULT_STREAM_FIRST_TOKEN_TIMEOUT_SEC: Final = 25.0
+DEFAULT_STREAM_IDLE_TIMEOUT_SEC: Final = 15.0
+DEFAULT_STREAM_HARD_DEADLINE_SEC: Final = 120.0
 
 BrainClientErrorCode = Literal[
     "brain_disabled",
@@ -55,6 +59,9 @@ class CoreBrainConfig:
     url: str = ""
     client_key: str = ""
     timeout_seconds: float = DEFAULT_BRAIN_TIMEOUT_SECONDS
+    stream_first_token_timeout_seconds: float = DEFAULT_STREAM_FIRST_TOKEN_TIMEOUT_SEC
+    stream_idle_timeout_seconds: float = DEFAULT_STREAM_IDLE_TIMEOUT_SEC
+    stream_hard_deadline_seconds: float = DEFAULT_STREAM_HARD_DEADLINE_SEC
 
     @classmethod
     def from_env(
@@ -70,11 +77,29 @@ class CoreBrainConfig:
         timeout = _bounded_timeout(
             environ.get("ALEX_BRAIN_TIMEOUT_SECONDS", "")
         )
+        stream_first = _bounded_timeout(
+            environ.get("ALEX_BRAIN_STREAM_FIRST_TOKEN_TIMEOUT_SECONDS", ""),
+            default=DEFAULT_STREAM_FIRST_TOKEN_TIMEOUT_SEC,
+            maximum=60.0,
+        )
+        stream_idle = _bounded_timeout(
+            environ.get("ALEX_BRAIN_STREAM_IDLE_TIMEOUT_SECONDS", ""),
+            default=DEFAULT_STREAM_IDLE_TIMEOUT_SEC,
+            maximum=30.0,
+        )
+        stream_hard = _bounded_timeout(
+            environ.get("ALEX_BRAIN_STREAM_HARD_DEADLINE_SECONDS", ""),
+            default=DEFAULT_STREAM_HARD_DEADLINE_SEC,
+            maximum=600.0,
+        )
         return cls(
             enabled=enabled,
             url=environ.get("ALEX_BRAIN_URL", "").strip(),
             client_key=environ.get("ALEX_BRAIN_CLIENT_KEY", "").strip(),
             timeout_seconds=timeout,
+            stream_first_token_timeout_seconds=stream_first,
+            stream_idle_timeout_seconds=stream_idle,
+            stream_hard_deadline_seconds=stream_hard,
         )
 
     @property
@@ -93,12 +118,18 @@ class BrainHttpResponse(Protocol):
 BrainHttpOpen = Callable[..., BrainHttpResponse]
 
 
-def _bounded_timeout(raw_value: str) -> float:
+def _bounded_timeout(raw_value: str, default: float = DEFAULT_BRAIN_TIMEOUT_SECONDS, maximum: float = MAX_BRAIN_TIMEOUT_SECONDS) -> float:
+    if not raw_value.strip():
+        return default
     try:
-        value = float(raw_value) if raw_value else DEFAULT_BRAIN_TIMEOUT_SECONDS
+        parsed = float(raw_value)
     except ValueError:
-        return DEFAULT_BRAIN_TIMEOUT_SECONDS
-    return min(MAX_BRAIN_TIMEOUT_SECONDS, max(MIN_BRAIN_TIMEOUT_SECONDS, value))
+        return default
+    if parsed < MIN_BRAIN_TIMEOUT_SECONDS:
+        return MIN_BRAIN_TIMEOUT_SECONDS
+    if parsed > maximum:
+        return maximum
+    return parsed
 
 
 def build_brain_chat_url(base_url: str) -> str:
@@ -227,6 +258,92 @@ class CoreBrainClient:
         if response.request_id != request.request_id:
             raise BrainClientError("invalid_brain_response")
         return response
+
+    def chat_stream(self, request: BrainChatRequest) -> Iterator[dict]:
+        if not self.config.enabled:
+            raise BrainClientError("brain_disabled")
+        if not self.config.configured:
+            raise BrainClientError("brain_not_configured")
+
+        url = build_brain_chat_url(self.config.url) + "/stream"
+        outbound = Request(
+            url,
+            data=request.model_dump_json().encode("utf-8"),
+            headers={
+                BRAIN_AUTH_HEADER: self.config.client_key,
+                "Content-Type": "application/json",
+                "Accept": "application/x-ndjson",
+            },
+            method="POST",
+        )
+
+        try:
+            import time
+            started = time.monotonic()
+            
+            with self._opener(
+                outbound,
+                timeout=self.config.stream_first_token_timeout_seconds,
+            ) as upstream:
+                try:
+                    if hasattr(upstream, "fp") and hasattr(upstream.fp, "raw") and hasattr(upstream.fp.raw, "_sock"):
+                        upstream.fp.raw._sock.settimeout(self.config.stream_idle_timeout_seconds)
+                except Exception:
+                    pass
+                    
+                total_read = 0
+                while True:
+                    if time.monotonic() - started > self.config.stream_hard_deadline_seconds:
+                        raise BrainClientError("brain_timeout")
+                        
+                    line = upstream.readline(65536)
+                    if not line:
+                        break
+                    total_read += len(line)
+                    if total_read > MAX_BRAIN_RESPONSE_BYTES * 2:  # allow more for stream
+                        raise BrainClientError("invalid_brain_response")
+                        
+                    decoded = line.decode("utf-8").strip()
+                    if decoded:
+                        try:
+                            event = json.loads(decoded)
+                        except json.JSONDecodeError:
+                            raise BrainClientError("invalid_brain_response") from None
+                            
+                        if event.get("type") == "error":
+                            code = event.get("code", "brain_unavailable")
+                            raise BrainClientError(code, http_status=500)
+                            
+                        yield event
+        except HTTPError as error:
+            code = "brain_unavailable"
+            if error.code in {408, 504}:
+                code = "brain_timeout"
+            else:
+                try:
+                    error_body = error.read(MAX_BRAIN_RESPONSE_BYTES + 1)
+                    if len(error_body) <= MAX_BRAIN_RESPONSE_BYTES:
+                        parsed = json.loads(error_body.decode("utf-8"))
+                        err_detail = parsed.get("error", {})
+                        returned_code = err_detail.get("code")
+                        if returned_code in {
+                            "brain_busy",
+                            "provider_error",
+                            "invalid_generation",
+                            "empty_generation",
+                        }:
+                            code = returned_code
+                except Exception:
+                    pass
+            raise BrainClientError(code, http_status=error.code) from None
+        except (socket.timeout, TimeoutError):
+            raise BrainClientError("brain_timeout") from None
+        except URLError as error:
+            if isinstance(error.reason, (socket.timeout, TimeoutError)):
+                raise BrainClientError("brain_timeout") from None
+            raise BrainClientError("brain_unavailable") from None
+        except OSError:
+            raise BrainClientError("brain_unavailable") from None
 
     def transcribe(self, session_id: str, request_id: str, audio_base64: str, language: str = "vi") -> dict:
         if not self.config.enabled:

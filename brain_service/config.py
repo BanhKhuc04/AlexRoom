@@ -16,6 +16,19 @@ MAX_PROVIDER_TIMEOUT_SECONDS = 25.0
 DEFAULT_WARMUP_TIMEOUT_SECONDS = 60.0
 MAX_WARMUP_TIMEOUT_SECONDS = 120.0
 
+PROVIDER_STREAM_FIRST_TOKEN_ENV = "ALEX_BRAIN_STREAM_FIRST_TOKEN_TIMEOUT_SECONDS"
+PROVIDER_STREAM_IDLE_ENV = "ALEX_BRAIN_STREAM_IDLE_TIMEOUT_SECONDS"
+PROVIDER_STREAM_HARD_DEADLINE_ENV = "ALEX_BRAIN_STREAM_HARD_DEADLINE_SECONDS"
+
+DEFAULT_STREAM_FIRST_TOKEN_TIMEOUT = 15.0
+MAX_STREAM_FIRST_TOKEN_TIMEOUT = 60.0
+
+DEFAULT_STREAM_IDLE_TIMEOUT = 10.0
+MAX_STREAM_IDLE_TIMEOUT = 30.0
+
+DEFAULT_STREAM_HARD_DEADLINE = 120.0
+MAX_STREAM_HARD_DEADLINE = 600.0
+
 
 @dataclass(frozen=True, slots=True)
 class BrainServiceConfig:
@@ -28,6 +41,9 @@ class BrainServiceConfig:
     provider_api_key: str | None = None
     provider_timeout_seconds: float = DEFAULT_PROVIDER_TIMEOUT_SECONDS
     warmup_timeout_seconds: float = DEFAULT_WARMUP_TIMEOUT_SECONDS
+    stream_first_token_timeout_seconds: float = DEFAULT_STREAM_FIRST_TOKEN_TIMEOUT
+    stream_idle_timeout_seconds: float = DEFAULT_STREAM_IDLE_TIMEOUT
+    stream_hard_deadline_seconds: float = DEFAULT_STREAM_HARD_DEADLINE
 
     @property
     def api_key_configured(self) -> bool:
@@ -47,6 +63,25 @@ class BrainServiceConfig:
             default=DEFAULT_WARMUP_TIMEOUT_SECONDS,
             maximum=MAX_WARMUP_TIMEOUT_SECONDS,
         )
+        stream_first_token_timeout = cls._parse_bounded_timeout(
+            os.getenv(PROVIDER_STREAM_FIRST_TOKEN_ENV),
+            env_name=PROVIDER_STREAM_FIRST_TOKEN_ENV,
+            default=DEFAULT_STREAM_FIRST_TOKEN_TIMEOUT,
+            maximum=MAX_STREAM_FIRST_TOKEN_TIMEOUT,
+        )
+        stream_idle_timeout = cls._parse_bounded_timeout(
+            os.getenv(PROVIDER_STREAM_IDLE_ENV),
+            env_name=PROVIDER_STREAM_IDLE_ENV,
+            default=DEFAULT_STREAM_IDLE_TIMEOUT,
+            maximum=MAX_STREAM_IDLE_TIMEOUT,
+        )
+        stream_hard_deadline = cls._parse_bounded_timeout(
+            os.getenv(PROVIDER_STREAM_HARD_DEADLINE_ENV),
+            env_name=PROVIDER_STREAM_HARD_DEADLINE_ENV,
+            default=DEFAULT_STREAM_HARD_DEADLINE,
+            maximum=MAX_STREAM_HARD_DEADLINE,
+        )
+
         return cls(
             api_key=os.getenv(BRAIN_API_KEY_ENV),
             provider=os.getenv(PROVIDER_ENV, "disabled").strip().lower(),
@@ -55,6 +90,9 @@ class BrainServiceConfig:
             provider_api_key=os.getenv(PROVIDER_API_KEY_ENV),
             provider_timeout_seconds=timeout,
             warmup_timeout_seconds=warmup_timeout,
+            stream_first_token_timeout_seconds=stream_first_token_timeout,
+            stream_idle_timeout_seconds=stream_idle_timeout,
+            stream_hard_deadline_seconds=stream_hard_deadline,
         )
 
     @staticmethod

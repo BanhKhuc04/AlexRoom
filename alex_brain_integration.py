@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Final, Literal, Protocol
+from typing import Final, Literal, Protocol, Iterator
 
 from pydantic import Field, ValidationError, model_validator
 
@@ -149,6 +149,7 @@ class CoreBrainChatResponse(StrictContractModel):
 
 class BrainProposalClient(Protocol):
     def chat(self, request: BrainChatRequest) -> BrainChatResponse: ...
+    def chat_stream(self, request: BrainChatRequest) -> Iterator[dict]: ...
 
 
 AuditWriter = Callable[[str, str, dict[str, object]], None]
@@ -241,6 +242,22 @@ class CoreBrainIntegration:
             raise BrainClientError("invalid_brain_response") from None
 
         return self._process_validated_response(request, response)
+
+    def chat_stream(self, request: BrainChatRequest) -> Iterator[dict]:
+        self._audit(
+            "request_accepted_stream",
+            "info",
+            {"request_id": request.request_id},
+        )
+        try:
+            yield from self._client.chat_stream(request)
+        except BrainClientError as error:
+            self._audit(
+                "request_failed_stream",
+                "warning",
+                {"request_id": request.request_id, "reason": error.code},
+            )
+            raise
 
     def chat_deterministic(
         self,

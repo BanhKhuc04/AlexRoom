@@ -3,6 +3,8 @@ import asyncio
 from unittest.mock import AsyncMock, Mock
 import os
 
+from starlette.websockets import WebSocketState
+
 os.environ["MQTT_PASSWORD"] = "test"
 os.environ["ALEX_API_KEY"] = "test_key"
 os.environ["MQTT_USERNAME"] = "test"
@@ -32,8 +34,8 @@ def test_voice_websocket_origin_validation():
         ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
         ws.receive_json.side_effect = [{"type": "auth", "api_key": ALEX_API_KEY}]
         ws.receive.side_effect = [{"text": "DONE"}]
-        ws.client_state = Mock()
-        ws.client_state.name = "CONNECTED"
+        ws.application_state = WebSocketState.CONNECTED
+        ws.client_state = WebSocketState.CONNECTED
         await v1_voice_stream(ws, "s1", "r1")
         ws.accept.assert_called_once()
     asyncio.run(run())
@@ -43,6 +45,8 @@ def test_voice_websocket_first_message_auth():
         # 1. Missing auth message (timeout or disconnect) -> 1008
         ws = AsyncMock(spec=WebSocket)
         ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
+        ws.application_state = WebSocketState.CONNECTED
+        ws.client_state = WebSocketState.CONNECTED
         ws.receive_json.side_effect = asyncio.TimeoutError()
         await v1_voice_stream(ws, "s1", "r1")
         ws.close.assert_called_with(code=1008)
@@ -50,6 +54,8 @@ def test_voice_websocket_first_message_auth():
         # 2. Invalid auth message -> 1008
         ws = AsyncMock(spec=WebSocket)
         ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
+        ws.application_state = WebSocketState.CONNECTED
+        ws.client_state = WebSocketState.CONNECTED
         ws.receive_json.side_effect = [{"type": "auth", "api_key": "wrong_key"}]
         await v1_voice_stream(ws, "s1", "r1")
         ws.close.assert_called_with(code=1008)
@@ -59,8 +65,8 @@ def test_voice_websocket_first_message_auth():
         ws.headers = {"host": "localhost:8000", "origin": "http://localhost:8000"}
         ws.receive_json.side_effect = [{"type": "auth", "api_key": ALEX_API_KEY}]
         ws.receive.side_effect = [{"text": "DONE"}]
-        ws.client_state = Mock()
-        ws.client_state.name = "CONNECTED"
+        ws.application_state = WebSocketState.CONNECTED
+        ws.client_state = WebSocketState.CONNECTED
         await v1_voice_stream(ws, "s1", "r1")
         # Should not close with 1008. It might close due to mock STT error.
         if ws.close.called:
@@ -80,8 +86,8 @@ def test_voice_websocket_session_byte_limit():
             {"bytes": b"a" * (1024 * 1024 * 5)}, # 5MB -> exceeds 5MB total
             {"text": "DONE"}
         ]
-        ws.client_state = Mock()
-        ws.client_state.name = "CONNECTED"
+        ws.application_state = WebSocketState.CONNECTED
+        ws.client_state = WebSocketState.CONNECTED
         await v1_voice_stream(ws, "s1", "r1")
         
         # Should send CANCELLED due to exceeding limit
@@ -104,8 +110,8 @@ def test_voice_websocket_chunk_byte_limit():
             {"bytes": b"a" * (1024 * 512 + 1)}, # 512KB + 1
             {"text": "DONE"}
         ]
-        ws.client_state = Mock()
-        ws.client_state.name = "CONNECTED"
+        ws.application_state = WebSocketState.CONNECTED
+        ws.client_state = WebSocketState.CONNECTED
         await v1_voice_stream(ws, "s1", "r1")
         
         # Should send CANCELLED due to exceeding limit

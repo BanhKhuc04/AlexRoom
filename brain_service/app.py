@@ -352,6 +352,74 @@ def create_app(
         return response
 
     @brain_app.post(
+        "/v1/chat/stream",
+        responses={
+            401: {"model": BrainErrorResponse},
+            422: {"model": BrainErrorResponse},
+            503: {"model": BrainErrorResponse},
+        },
+    )
+    def chat_stream(
+        payload: BrainChatRequest,
+        _: None = Depends(require_brain_api_key),
+    ):
+        from fastapi.responses import StreamingResponse
+        import json
+        
+        def event_generator():
+            started = time.monotonic()
+            try:
+                for event in service.chat_stream(payload):
+                    out = {
+                        "type": event.type,
+                        "request_id": event.request_id,
+                    }
+                    if event.delta is not None:
+                        out["delta"] = event.delta
+                    if event.assistant_text is not None:
+                        out["assistant_text"] = event.assistant_text
+                        
+                    yield json.dumps(out, ensure_ascii=False) + "\n"
+                
+                latency_ms = round((time.monotonic() - started) * 1000)
+                _log_outcome(
+                    "/v1/chat/stream",
+                    "ok",
+                    payload.request_id,
+                    provider=service.provider_name,
+                    latency_ms=latency_ms,
+                )
+            except Exception as error:
+                code = "provider_error"
+                if isinstance(error, ProviderTimeoutError):
+                    code = "brain_timeout"
+                elif isinstance(error, ProviderUnavailableError):
+                    code = "provider_error"
+                elif isinstance(error, EmptyGenerationError):
+                    code = "empty_generation"
+                elif isinstance(error, InvalidProviderResponseError):
+                    code = "invalid_generation"
+                elif isinstance(error, InferenceBusyError):
+                    code = "brain_busy"
+                elif isinstance(error, ValueError):
+                    code = "invalid_request"
+                
+                _log_outcome(
+                    "/v1/chat/stream",
+                    code,
+                    payload.request_id,
+                    provider=service.provider_name,
+                )
+                yield json.dumps({
+                    "type": "error",
+                    "request_id": payload.request_id,
+                    "code": code,
+                    "message": str(error)
+                }, ensure_ascii=False) + "\n"
+
+        return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
+    @brain_app.post(
         "/v1/stt",
         response_model=BrainSTTResponse,
         responses={
