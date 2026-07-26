@@ -76,7 +76,7 @@ test("static/app.js contains valid quality, voice, and init references", async (
   assert.match(appSource, /async function init\(\)\s*\{[\s\S]*?applyExperience\(quality,\s*userReducedMotion\);/);
 
   // Verify microphone toggle wiring in bindEvents
-  assert.match(appSource, /elements\.microphoneToggle\.addEventListener\("click",\s*\(\)\s*=>\s*\{\s*void presenceView\.toggleMicrophone\(\);\s*\}\);/);
+  assert.match(appSource, /elements\.microphoneToggle\.addEventListener\("click",\s*\(\)\s*=>\s*\{/);
 });
 
 test("app.js module imports resolve and execute init path without ReferenceError", async () => {

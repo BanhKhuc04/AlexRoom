@@ -88,7 +88,7 @@ export class AlexApi {
       this.request("/api/events"),
       this.request("/api/v1/devices"),
       this.request("/api/v1/commands?limit=1"),
-      this.request("/api/v1/ota/esp01").catch(() => null),
+      this.apiKey ? this.request("/api/v1/ota/esp01").catch(() => null) : Promise.resolve(null),
     ]);
 
     return {

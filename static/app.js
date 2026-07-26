@@ -9,6 +9,7 @@ import { elements, query } from "./ui/elements-phase2.js";
 import { createPresenceCommands } from "./ui/presence-commands.js";
 import { createPresenceView } from "./ui/presence-view.js";
 import { WORKSPACES, renderWorkspace } from "./ui/workspaces.js";
+import { handleMicrophoneOriginPolicy } from "./core/origin-policy.js";
 
 import { VoiceClient } from "./core/voice-client.js";
 import { AudioRecorder } from "./core/audio-recorder.js";
@@ -711,7 +712,17 @@ function bindEvents() {
   query("#dismissResponse").addEventListener("click", presenceView.hideMicroResponse);
   query("#dismissContext").addEventListener("click", presenceView.hideContextPanel);
   query("#cancelCommand").addEventListener("click", () => { soundEngine.play("cancel"); presenceCommands.closeCommandEntry(); });
-  elements.microphoneToggle.addEventListener("click", () => { void presenceView.toggleMicrophone(); });
+  elements.microphoneToggle.addEventListener("click", () => {
+    handleMicrophoneOriginPolicy(
+      window.isSecureContext,
+      snapshot?.config?.canonical_origin,
+      {
+        confirm: /** @param {string} msg */ (msg) => window.confirm(msg),
+        navigate: /** @param {string} url */ (url) => { window.location.href = url; },
+        toggle: () => { void presenceView.toggleMicrophone(); }
+      }
+    );
+  });
   query("#refreshButton").addEventListener("click", () => { void refreshSnapshot().then(() => showToast("Đã đồng bộ trạng thái mới nhất.")); });
   query("#openSettings").addEventListener("click", openExperienceDialog);
   query("#roomModeButton").addEventListener("click", () => setWorkspace("scenes"));

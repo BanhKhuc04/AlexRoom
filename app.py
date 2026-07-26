@@ -16,6 +16,7 @@ from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import Any
 
 import paho.mqtt.client as mqtt
@@ -666,9 +667,69 @@ def verify_auth(_: None = Depends(require_api_key)) -> dict[str, bool]:
     return {"ok": True}
 
 
+def normalize_canonical_origin(raw: str) -> str:
+    raw = raw.strip()
+    if not raw:
+        return ""
+
+    parsed = urlparse(raw)
+    if (
+        parsed.scheme == "https"
+        and parsed.netloc
+        and "@" not in parsed.netloc
+        and (not parsed.path or parsed.path == "/")
+        and not parsed.query
+        and not parsed.fragment
+    ):
+        return f"https://{parsed.netloc}"
+
+    return ""
+
+_cached_canonical_origin: str | None = None
+
+def resolve_canonical_origin() -> str:
+    global _cached_canonical_origin
+    if _cached_canonical_origin is not None:
+        return _cached_canonical_origin
+
+    # 1. Check environment variable first
+    raw_origin = os.environ.get("ALEX_CANONICAL_ORIGIN", "").strip()
+    if raw_origin:
+        _cached_canonical_origin = normalize_canonical_origin(raw_origin)
+        return _cached_canonical_origin
+
+    # 2. Fallback to tailscale status --json
+    try:
+        result = subprocess.run(
+            ["tailscale", "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=True
+        )
+        data = json.loads(result.stdout)
+
+        if isinstance(data, dict):
+            self_node = data.get("Self")
+            if isinstance(self_node, dict):
+                dns_name = self_node.get("DNSName")
+                if isinstance(dns_name, str):
+                    dns_name = dns_name.strip()
+                    if dns_name:
+                        dns_name = dns_name.removesuffix(".")
+                        _cached_canonical_origin = normalize_canonical_origin(f"https://{dns_name}")
+                        return _cached_canonical_origin
+    except (subprocess.SubprocessError, json.JSONDecodeError, OSError, ValueError):
+        pass
+
+    _cached_canonical_origin = ""
+    return _cached_canonical_origin
+
 @app.get("/api/config")
 def get_config() -> dict[str, Any]:
-    return load_config()
+    config = load_config()
+    config["canonical_origin"] = resolve_canonical_origin()
+    return config
 
 
 @app.put("/api/config")

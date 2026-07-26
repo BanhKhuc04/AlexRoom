@@ -40,6 +40,7 @@ export interface ConfigPayload {
   room_name: string;
   relay_names: Record<string, string>;
   relay_subtitles: Record<string, string>;
+  canonical_origin?: string;
 }
 
 export interface DevicePayload extends NodeVerification {
