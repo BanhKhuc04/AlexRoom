@@ -79,6 +79,7 @@ def test_e2e_voice_pipeline():
             "assistant_text": "Đã bật đèn.",
             "error_code": None
         })
+        ws.close.assert_awaited_once_with()
 
     asyncio.run(run())
 
@@ -109,6 +110,7 @@ def test_no_speech_bypasses_router_and_tts():
 
         emitted_types = [call[1][0].get("type") for call in ws.send_json.mock_calls]
         assert emitted_types == ["auth_ok", "transcribing", "no_speech"]
+        ws.close.assert_awaited_once_with()
     asyncio.run(run())
 
 

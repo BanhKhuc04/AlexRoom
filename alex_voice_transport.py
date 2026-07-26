@@ -194,6 +194,7 @@ class BoundedAudioTransport:
                         "session_id": session_id,
                         "request_id": request_id
                     })
+                    await websocket.close()
                 session.transition_to(VoiceSessionState.COMPLETED)
                 return
 
