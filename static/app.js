@@ -150,10 +150,10 @@ const presenceView = createPresenceView({
   },
   onMicStop: async () => {
     if (audioRecorder.recording) {
-      const wavBuffer = await audioRecorder.stop();
+      // Audio has already been streamed through onChunk.
+      await audioRecorder.stop();
       if (voiceClient.authenticated) {
         if (alexState.can("thinking")) setAlexState("thinking");
-        voiceClient.sendAudioChunk(wavBuffer);
         voiceClient.endAudio();
       }
     }
