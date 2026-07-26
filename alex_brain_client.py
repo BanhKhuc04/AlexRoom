@@ -18,6 +18,7 @@ DEFAULT_BRAIN_TIMEOUT_SECONDS: Final = 5.0
 MIN_BRAIN_TIMEOUT_SECONDS: Final = 0.1
 MAX_BRAIN_TIMEOUT_SECONDS: Final = 30.0
 MAX_BRAIN_RESPONSE_BYTES: Final = 256 * 1024
+MAX_BRAIN_TTS_RESPONSE_BYTES: Final = 8 * 1024 * 1024
 
 BrainClientErrorCode = Literal[
     "brain_disabled",
@@ -305,7 +306,7 @@ class CoreBrainClient:
 
         try:
             with self._opener(outbound, timeout=self.config.timeout_seconds) as upstream:
-                body = upstream.read(MAX_BRAIN_RESPONSE_BYTES + 1)
+                body = upstream.read(MAX_BRAIN_TTS_RESPONSE_BYTES + 1)
         except HTTPError as error:
             if error.code in {408, 504}:
                 raise BrainClientError("brain_timeout", http_status=error.code) from None
@@ -319,7 +320,7 @@ class CoreBrainClient:
         except OSError:
             raise BrainClientError("brain_unavailable") from None
 
-        if len(body) > MAX_BRAIN_RESPONSE_BYTES:
+        if len(body) > MAX_BRAIN_TTS_RESPONSE_BYTES:
             raise BrainClientError("invalid_brain_response")
 
         try:
