@@ -8,7 +8,7 @@
 **Nhánh Voice hiện tại:** `phase-1.0-voice-foundation`  
 **Source HEAD mới nhất được báo cáo:** `406371c` — `fix(voice): close phase 1.0 spoken runtime gaps`
 
-> **Lưu ý source-of-truth:** `406371c` đã PASS software test theo báo cáo Codex, nhưng lịch sử trao đổi chưa có log xác nhận đầy đủ rằng cả Orange Pi Core và Brain PC đang cùng chạy commit này. Trạng thái deploy phải được re-verify trước khi coi là runtime source-of-truth.
+> **Lưu ý source-of-truth:** AO CONTROL PLANE: PASS. BatchMode verified; Core and Brain at 406371c with clean worktrees and active services. Local at 591bb68 because it adds docs/guardrails only; runtime code is aligned. Control-plane PASS does NOT imply product SOFTWARE/RUNTIME/PHYSICAL PASS. Preserve genuine voice runtime and physical acceptance gaps and historical observations.
 
 ---
 
@@ -922,7 +922,7 @@ Khả năng mạnh:
 3. mismatch frontend asset/backend commit;
 4. Service Worker/cache stale;
 5. browser giữ module `304 Not Modified`;
-6. deployment HEAD Core/Brain không đồng bộ `406371c`;
+6. (Đã loại trừ) deployment HEAD Core/Brain không đồng bộ `406371c`;
 7. state ownership conflict giữa Presence/App/Voice events.
 
 ## 13.1. Service Worker/cache
@@ -945,8 +945,8 @@ Rủi ro browser giữ JS cũ là có thật.
 
 ## 13.2. Diagnostic cần làm trước khi sửa tiếp
 
-- verify Core HEAD;
-- verify Brain HEAD;
+- (COMPLETED) verify Core HEAD;
+- (COMPLETED) verify Brain HEAD;
 - verify browser-served asset version/hash;
 - inspect F12 Console;
 - inspect Voice WebSocket Messages;
@@ -1090,14 +1090,7 @@ Source:
 
 đều có software report PASS.
 
-Nhưng transcript hiện tại không có đủ terminal evidence để khẳng định chắc chắn:
-
-```text
-Core HEAD = 406371c
-Brain HEAD = 406371c
-```
-
-**Việc đầu tiên khi quay lại runtime: verify 3 HEAD: Local / Core / Brain.**
+AO CONTROL PLANE: PASS. BatchMode verified; Core and Brain at 406371c with clean worktrees and active services. Local at 591bb68 because it adds docs/guardrails only; runtime code is aligned.
 
 ---
 
@@ -1155,10 +1148,6 @@ vs
 VoiceClient
 vs
 WebSocket
-vs
-Core HEAD
-vs
-Brain HEAD
 ```
 
 trước khi thêm feature.
@@ -1618,25 +1607,11 @@ Không gộp ba mức.
 
 # 30. NEXT ACTION PLAN — THỨ TỰ CHÍNH XÁC
 
-## Step 1 — Verify deployment truth
+## Step 1 — Verify deployment truth (COMPLETED)
 
-Trên dev/Core/Brain:
+AO CONTROL PLANE: PASS. BatchMode verified; Core and Brain at 406371c with clean worktrees and active services. Local at 591bb68 because it adds docs/guardrails only; runtime code is aligned. Mark Step 1 completed.
 
-```text
-git rev-parse --short HEAD
-git status --short
-systemctl is-active ...
-```
-
-Mục tiêu xác nhận:
-
-```text
-Local = 406371c
-Core  = 406371c
-Brain = 406371c
-```
-
-hoặc ghi rõ mismatch.
+Exact next checkpoint P0 Core/Brain Reliability Correction.
 
 ## Step 2 — Diagnose frontend freeze
 
@@ -1715,7 +1690,6 @@ Lý do:
 - frontend hiện có dấu hiệu runtime/state regression;
 - latest VAD source chưa physical verified;
 - real browser speaker response chưa được nghe ổn định;
-- deployment HEAD latest chưa được xác nhận đầy đủ.
 
 ## Safety
 
